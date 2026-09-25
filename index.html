@@ -280,7 +280,7 @@ const CONFIG = {
   markMaxSize: 0.4,       // 0–1: the largest a chapter number may be, as a share of its cell
   numberMinPx: 8,         // numbers replace stars once a typical chapter's number is this big on screen
   game: {
-    enabled: true,        // show the Bible Game (clue, guesses) on top of the map
+    enabled: false,        // show the Bible Game (clue, guesses) on top of the map
     maxGuesses: 5,
     dimRuledOut: true,    // dim every chapter the guesses so far have ruled out
   },
@@ -664,15 +664,23 @@ const isNarrow = () => viewport.w < 700;
 // Screen space kept clear for the chrome and the device's safe areas.
 // Narrow (phone portrait): room below for the stacked selection info.
 // Short (phone landscape): the info is one line, so keep margins slim.
-function insets() {
-  const safe = getComputedStyle(document.getElementById('safe'));
+// The device's safe-area margins, read from CSS. Reading computed styles
+// forces a layout, so this is done on start-up and resize only, never per
+// frame (insets() runs every frame via frame() and clampK()).
+const safeArea = { top: 0, right: 0, bottom: 0, left: 0 };
+function measureSafeArea() {
+  const cs = getComputedStyle(document.getElementById('safe'));
   const px = (v) => parseFloat(v) || 0;
+  Object.assign(safeArea, { top: px(cs.paddingTop), right: px(cs.paddingRight), bottom: px(cs.paddingBottom), left: px(cs.paddingLeft) });
+}
+
+function insets() {
   const base = isNarrow() ? { top: 48, right: 14, bottom: 110, left: 34 }   // left: testament labels
     : viewport.h < 500 ? { top: 38, right: 20, bottom: 36, left: 40 }
     : { top: 64, right: 64, bottom: 104, left: 64 };
   const i = {
-    top: base.top + px(safe.paddingTop), right: base.right + px(safe.paddingRight),
-    bottom: base.bottom + px(safe.paddingBottom), left: base.left + px(safe.paddingLeft),
+    top: base.top + safeArea.top, right: base.right + safeArea.right,
+    bottom: base.bottom + safeArea.bottom, left: base.left + safeArea.left,
   };
   // The game's clue sits above the map; its tray below it on phones, or
   // beside it (left) on wider screens.
@@ -791,6 +799,17 @@ const useNumbers = () => CONFIG.centreMark === 'number';
 const NUMBER_HYSTERESIS_PX = .75, NUMBER_MAX_PX = 24;
 let numbersOn = false;
 
+// Swap stars ↔ numbers: show the incoming layer, fade across (CSS), then
+// take the outgoing layer out of rendering entirely (display: none).
+const MARK_FADE_MS = 220;
+let markFade = null;
+function showMarkLayer() {
+  clearTimeout(markFade);
+  $(numbersOn ? 'numbers' : 'stars').style.display = '';
+  requestAnimationFrame(() => svg.classList.toggle('numbers-on', numbersOn));   // after it's displayed, so it fades
+  markFade = setTimeout(() => { $(numbersOn ? 'stars' : 'numbers').style.display = 'none'; }, MARK_FADE_MS + 40);
+}
+
 const bookLines = [];
 // A region made of several rectangles, as one path (they never overlap).
 const regionPath = (rects) => rects.map(rectPath).join('');
@@ -837,14 +856,15 @@ function drawWorld(model) {
   }
   const sizes = model.chapters.map(numberSize).sort((a, b) => a - b);
   medianNumberSize = sizes[sizes.length >> 1];
-  markNz = null;
+  markNz = markDot = null;
 }
 const numberEls = [];
-let medianNumberSize = 1, markNz = null;
+let medianNumberSize = 1, markNz = null, markDot = null;
 
 // Label measurement (for "only where space permits").
 const measureCtx = document.createElement('canvas').getContext('2d');
-const labelPx = () => parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--label-px')) || 9;
+let labelPxCache = null;   // cleared on resize
+const labelPx = () => (labelPxCache ??= parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--label-px')) || 9);
 function measure(text, px, spacingEm) {
   measureCtx.font = `400 ${px}px ${getComputedStyle(document.body).fontFamily}`;
   return measureCtx.measureText(text).width + text.length * px * spacingEm;
@@ -900,10 +920,12 @@ function renderCamera() {
   $('world').setAttribute('transform',
     `translate(${viewport.w / 2 - camera.cx * k} ${viewport.h / 2 - camera.cy * k}) scale(${k})`);
 
-  // Stars grow a little as you approach, but stay stars.
+  // Stars grow a little as you approach, but stay stars. The size moves in
+  // half-pixel steps: every change restyles all 1,189 stars, so it must not
+  // change on every frame of a pinch.
   const overviewK = frame(MODEL.world).k;
-  const dot = Math.min(7, 3 * (k / overviewK) ** .28);
-  $('stars').style.setProperty('--dot', `${dot}px`);
+  const dot = Math.round(Math.min(7, 3 * (k / overviewK) ** .28) * 2) / 2;
+  if (dot !== markDot) { $('stars').style.setProperty('--dot', `${dot}px`); markDot = dot; }
 
   // Number marks: numbers once a typical number is legible, stars below
   // that; and damp their growth beyond NUMBER_MAX_PX.
@@ -911,8 +933,11 @@ function renderCamera() {
   if (useNumbers()) {
     const typicalPx = medianNumberSize * k;
     const on = numbersOn ? typicalPx >= CONFIG.numberMinPx - NUMBER_HYSTERESIS_PX : typicalPx >= CONFIG.numberMinPx;
-    if (on !== numbersOn) { numbersOn = on; svg.classList.toggle('numbers-on', on); }
-    nz = Math.min(1, NUMBER_MAX_PX / typicalPx);
+    if (on !== numbersOn) { numbersOn = on; showMarkLayer(); }
+    // Damping in sixth-of-an-octave steps (~12%), for the same reason as
+    // the star size; rounded down so numbers never exceed the cap.
+    const raw = NUMBER_MAX_PX / typicalPx;
+    nz = raw >= 1 ? 1 : 2 ** (Math.floor(Math.log2(raw) * 6) / 6);
     if (nz !== markNz) { $('numbers').style.setProperty('--nz', nz); markNz = nz; }
   }
 
@@ -1401,6 +1426,8 @@ addEventListener('resize', () => {
   const was = { ...viewport };
   viewport.w = innerWidth; viewport.h = innerHeight;
   if (!MODEL) return;
+  measureSafeArea();
+  labelPxCache = null;
   measureGameChrome();
   if (layoutFor() !== MODEL.layout) { useLayout(layoutFor()); return; }   // rotated
   // A mobile address bar showing or hiding only nudges the height: leave
@@ -1603,6 +1630,8 @@ async function start() {
   $('hint').textContent = COARSE
     ? 'tap to explore · pinch to zoom · hold to scan'
     : 'click to select · again to enter · scroll to zoom · esc to return';
+  measureSafeArea();
+  $('numbers').style.display = 'none';            // stars first; numbers join when legible
   if (CONFIG.game.enabled) { MODEL = MODELS[layoutFor()]; startGame(); }
   useLayout(layoutFor());
   if (location.hash) applyHash({ history: 'none', animate: false });   // deep link
