@@ -15,6 +15,7 @@
     --ink-3:    #5c5954;   /* faint text */
     --line-ch:  #2a2c2e;   /* chapter boundaries: fine */
     --line-bk:  #7d7a74;   /* book boundaries: medium */
+    --line-dv:  #aeaaa2;   /* division boundaries: stronger */
     --line-ts:  #d9d5cd;   /* testament boundaries: strongest */
     --font: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
   }
@@ -34,10 +35,14 @@
   /* --c is a book's colour from colours.json; unset means monochrome. */
   #book-lines path { fill: none; stroke: var(--c, var(--line-bk)); stroke-width: 1; }
   #book-lines path.tinted { stroke-opacity: .7; }
+  #book-lines path.lit    { stroke-opacity: 1; transition: stroke-opacity 180ms; }
+  #division-lines  { fill: none; stroke: var(--line-dv); stroke-width: 1.25; stroke-linecap: square; }
   #testament-lines { fill: none; stroke: var(--line-ts); stroke-width: 1.5; }
   #stars           { fill: none; stroke-linecap: round; }
   #stars path      { stroke: var(--c, var(--ink)); stroke-width: calc(var(--dot) * var(--s, 1)); }
 
+  #hover-division-fill { fill: var(--ink); opacity: 0; transition: opacity 240ms; }
+  #hover-division-fill.on { opacity: .018; }
   #hover-book-fill  { fill: var(--ink); opacity: 0; transition: opacity 180ms; }
   #hover-book-line  { fill: none; stroke: var(--c, var(--ink)); stroke-width: 1; opacity: 0; transition: opacity 180ms; }
   #hover-book-fill.on { opacity: .028; }
@@ -76,12 +81,15 @@
   #crumbs { top: 18px; left: 24px; color: var(--ink-3); }
   #crumbs span { cursor: pointer; transition: color 150ms; }
   #crumbs span:hover, #crumbs span.current { color: var(--ink-2); }
-  #crumbs span.current { cursor: default; }
+  #crumbs span.current, #crumbs span.static { cursor: default; }
+  #crumbs span.static:hover { color: inherit; }
   #crumbs i { font-style: normal; padding: 0 .7em; }
   #info { bottom: 18px; left: 24px; }
   #info div:nth-child(1) { color: var(--ink-3); }
-  #info div:nth-child(2) { color: var(--ink-2); }
-  #info div:nth-child(3) { color: var(--ink); }
+  #info div:nth-child(2), #info div:nth-child(3) { color: var(--ink-2); }
+  #info div:nth-child(4) { color: var(--ink); }
+  #info [data-go] { cursor: pointer; transition: color 150ms; }
+  #info [data-go]:hover { color: var(--ink); }
   #hint { bottom: 18px; right: 24px; color: var(--ink-2); text-align: right; transition: opacity 300ms; }
   #hint.away { opacity: 0; }
 
@@ -91,6 +99,7 @@
     padding: 5px 8px; background: var(--bg); border-left: 1px solid var(--line-bk);
   }
   #tooltip.on { opacity: 1; }
+  #tooltip .d { color: var(--ink-2); }
   #tooltip .b { color: var(--c, var(--ink)); }
   #tooltip .c { color: var(--ink-2); }
 </style>
@@ -99,10 +108,12 @@
 
 <svg id="map" xmlns="http://www.w3.org/2000/svg">
   <g id="world">
+    <path id="hover-division-fill"/>
     <rect id="hover-book-fill"/>
     <rect id="hover-chapter"/>
     <path id="chapter-lines"/>
     <g id="book-lines"></g>
+    <path id="division-lines"/>
     <path id="testament-lines"/>
     <rect id="hover-book-line"/>
     <rect id="sel-book" visibility="hidden"/>
@@ -123,7 +134,7 @@
 <nav id="crumbs" class="chrome"></nav>
 <div id="info" class="chrome"></div>
 <div id="hint" class="chrome">click to select &middot; again to enter &middot; esc to return</div>
-<div id="tooltip"><div class="b"></div><div class="c"></div></div>
+<div id="tooltip"><div class="d"></div><div class="b"></div><div class="c"></div></div>
 
 <script>
 'use strict';
@@ -145,9 +156,12 @@ const CONFIG = {
    The 66-book Protestant canon, from bible.json.
    ===================================================================== */
 
-// Loaded from bible.json and reduced to what the map needs:
-// [{ id, name, books: [{ key, name, chapters }] }], in canonical order.
-// (The JSON's divisions are flattened; they are not yet part of the map.)
+// Loaded from bible.json and reduced to what the map needs, keeping the
+// structure: [{ id, name, divisions: [{ id, name, books: [{ key, name,
+// chapters, verses }] }] }], in canonical order. bible.json is the only
+// source of structure (colours.json never implies membership).
+const slug = (s) => s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+
 async function loadBible(url) {
   const res = await fetch(url);
   if (!res.ok) throw new Error(`${url}: ${res.status}`);
@@ -155,9 +169,17 @@ async function loadBible(url) {
   return json.testaments.map((t) => ({
     id: `${t.name[0]}T`,
     name: `${t.name} Testament`,
-    books: t.divisions.flatMap((d) => d.books.map(({ key, name, chapters, verses }) => ({ key, name, chapters, verses }))),
+    divisions: t.divisions.map((d) => ({
+      id: slug(d.name),
+      name: d.name,
+      books: d.books.map(({ key, name, chapters, verses }) => ({ key, name, chapters, verses })),
+    })),
   }));
 }
+
+// A testament's books in canonical order, each carrying its division.
+const booksOf = (t) => t.divisions.flatMap((d) =>
+  d.books.map((b) => ({ ...b, divisionId: d.id, divisionName: d.name })));
 
 
 // Book colours from colours.json: { GEN: '#c6feff', ... }. Presentation
@@ -199,6 +221,8 @@ function tint(el, book) {
      left→right and top→bottom at each level.
    - Each book is divided into rows of equal-area chapter cells, again in
      reading order.
+   - Divisions play no part in the partition: books are laid out as one
+     ordered list per testament and merely carry their division identity.
    ===================================================================== */
 
 const WORLD = { x: 0, y: 0, width: 1600, height: 1000, gutter: 30 };
@@ -285,25 +309,25 @@ function layoutChapters(n, x, y, w, h) {
 }
 
 function layoutBible(bible, world) {
-  const total = bible.reduce((s, t) => s + t.books.reduce((a, b) => a + b.chapters, 0), 0);
+  const total = bible.reduce((s, t) => s + booksOf(t).reduce((a, b) => a + b.chapters, 0), 0);
   const usableH = world.height - world.gutter * (bible.length - 1);
   const testaments = [], books = [], chapters = [];
   let ty = world.y;
 
   bible.forEach((t) => {
-    const items = t.books.map(({ key, name, chapters, verses }) => ({ key, name, n: chapters, verses }));
+    const items = booksOf(t).map(({ chapters, ...b }) => ({ ...b, n: chapters }));
     const tRect = { x: world.x, y: ty, width: world.width, height: usableH * chapterSum(items) / total };
     const testament = { id: t.id, name: t.name, ...tRect, books: [] };
     testaments.push(testament);
 
-    for (const { key, name, n, verses, rect } of partitionBooks(items, tRect).regions) {
+    for (const { key, name, n, verses, divisionId, divisionName, rect } of partitionBooks(items, tRect).regions) {
       const book = {
-        index: books.length, testament: t.name, testamentId: t.id, key, name, chapterCount: n,
-        ...rect, chapters: [],
+        index: books.length, testament: t.name, testamentId: t.id, division: divisionName, divisionId,
+        key, name, chapterCount: n, ...rect, chapters: [],
       };
       layoutChapters(n, rect.x, rect.y, rect.width, rect.height).forEach((cell, i) => {
         const chapter = {
-          index: chapters.length, testament: t.name, testamentId: t.id,
+          index: chapters.length, testament: t.name, testamentId: t.id, division: divisionName, divisionId,
           book: name, bookKey: key, bookIndex: book.index, chapter: i + 1,
           verses: verses?.[i] ?? null,
           ...cell, centerX: cell.x + cell.width / 2, centerY: cell.y + cell.height / 2,
@@ -324,17 +348,137 @@ function layoutBible(bible, world) {
 /* =====================================================================
    3. GEOMETRY / MODEL
    The complete, renderer-agnostic world. Each chapter looks like:
-   { testament, book, chapter, x, y, width, height, centerX, centerY, ... }
+   { testament, division, book, chapter, x, y, width, height, centerX, centerY, ... }
+
+   Divisions are semantic regions derived AFTER layout: a division is the
+   union of its books' existing rectangles, so it may be an irregular
+   orthogonal shape. `bounds` is only its bounding box, for camera framing.
    ===================================================================== */
 
 let MODEL;   // built at start-up, once bible.json has loaded
 
-function checkModel(model) {
+// --- Region geometry: a region is a set of non-overlapping axis-aligned
+//     rectangles that may touch along their edges. ---
+
+const EPS = 1e-6;
+const near = (a, b) => Math.abs(a - b) < EPS;
+
+function boundsOf(rects) {
+  const x = Math.min(...rects.map((r) => r.x)), y = Math.min(...rects.map((r) => r.y));
+  const x2 = Math.max(...rects.map((r) => r.x + r.width)), y2 = Math.max(...rects.map((r) => r.y + r.height));
+  return { x, y, width: x2 - x, height: y2 - y };
+}
+
+// The parts of [lo, hi] not covered by any of the intervals in `cuts`.
+function subtractIntervals(lo, hi, cuts) {
+  const pieces = [];
+  let cur = lo;
+  for (const [a, b] of [...cuts].sort((p, q) => p[0] - q[0])) {
+    if (b <= cur + EPS) continue;
+    if (a > cur + EPS) pieces.push([cur, Math.min(a, hi)]);
+    cur = Math.max(cur, b);
+    if (cur >= hi - EPS) break;
+  }
+  if (cur < hi - EPS) pieces.push([cur, hi]);
+  return pieces.filter(([a, b]) => b - a > EPS);
+}
+
+// The outer boundary of a region, as axis-aligned segments { x1, y1, x2, y2 }:
+// every rectangle side, minus the stretches where another rectangle of the
+// same region lies directly on the other side (those are internal edges).
+function regionOutline(rects) {
+  const segments = [];
+  for (const r of rects) {
+    const left = r.x, right = r.x + r.width, top = r.y, bottom = r.y + r.height;
+    const sides = [   // where the side lies, its extent, and which edge of a neighbour would meet it
+      { at: top,    lo: left, hi: right,  horizontal: true,  meets: (o) => o.y + o.height },
+      { at: bottom, lo: left, hi: right,  horizontal: true,  meets: (o) => o.y },
+      { at: left,   lo: top,  hi: bottom, horizontal: false, meets: (o) => o.x + o.width },
+      { at: right,  lo: top,  hi: bottom, horizontal: false, meets: (o) => o.x },
+    ];
+    for (const side of sides) {
+      const covered = rects
+        .filter((o) => o !== r && near(side.meets(o), side.at))
+        .map((o) => (side.horizontal ? [o.x, o.x + o.width] : [o.y, o.y + o.height]));
+      for (const [a, b] of subtractIntervals(side.lo, side.hi, covered)) {
+        segments.push(side.horizontal
+          ? { x1: a, y1: side.at, x2: b, y2: side.at }
+          : { x1: side.at, y1: a, x2: side.at, y2: b });
+      }
+    }
+  }
+  return segments;
+}
+
+// Does a segment lie on the perimeter of rectangle r?
+function onPerimeter(sg, r) {
+  return sg.y1 === sg.y2
+    ? near(sg.y1, r.y) || near(sg.y1, r.y + r.height)
+    : near(sg.x1, r.x) || near(sg.x1, r.x + r.width);
+}
+
+// Layout, then the semantic regions derived from it. Divisions never
+// influence a single coordinate: they are read off the finished geometry.
+function buildModel(bible, world) {
+  const model = layoutBible(bible, world);
+  model.divisions = [];
+  for (const t of bible) {
+    const testament = model.testaments.find((x) => x.id === t.id);
+    testament.divisions = [];
+    for (const d of t.divisions) {
+      const books = testament.books.filter((b) => b.divisionId === d.id);
+      const division = {
+        index: model.divisions.length, id: d.id, name: d.name,
+        testament: t.name, testamentId: t.id, books,
+        bounds: boundsOf(books),
+        // Outer edges; those not on the testament's own border separate
+        // this division from a neighbouring one.
+        outline: regionOutline(books).map((sg) => ({ ...sg, betweenDivisions: !onPerimeter(sg, testament) })),
+      };
+      for (const b of books) {
+        b.divisionIndex = division.index;
+        for (const c of b.chapters) c.divisionIndex = division.index;
+      }
+      testament.divisions.push(division);
+      model.divisions.push(division);
+    }
+  }
+  return model;
+}
+
+function checkModel(model, bible) {
   console.assert(model.testaments.length === 2, 'expected 2 testaments');
   console.assert(model.books.length === 66, 'expected 66 books');
   console.assert(model.chapters.length === 1189, 'expected 1,189 chapters');
   console.assert(model.testaments[0].books.reduce((s, b) => s + b.chapterCount, 0) === 929, 'OT should have 929 chapters');
   console.assert(model.testaments[1].books.reduce((s, b) => s + b.chapterCount, 0) === 260, 'NT should have 260 chapters');
+
+  // Division integrity: exactly bible.json's divisions, in order; every book
+  // in exactly one; every chapter inheriting its book's; outlines enclose.
+  const expected = bible.flatMap((t) => t.divisions.map((d) => `${t.id}/${d.id}:${d.books.map((b) => b.key).join(',')}`));
+  const actual = model.divisions.map((d) => `${d.testamentId}/${d.id}:${d.books.map((b) => b.key).join(',')}`);
+  console.assert(expected.join('|') === actual.join('|'), 'divisions should match bible.json exactly');
+  console.assert(new Set(model.divisions.map((d) => d.id)).size === model.divisions.length, 'division ids should be unique');
+  const inDivisions = model.divisions.flatMap((d) => d.books);
+  console.assert(inDivisions.length === model.books.length && inDivisions.every((b, i) => b === model.books[i]),
+    'every book should belong to exactly one division, in canonical order');
+  console.assert(model.chapters.every((c) => {
+    const b = model.books[c.bookIndex], d = model.divisions[c.divisionIndex];
+    return d && c.divisionId === b.divisionId && d.id === b.divisionId && d.books.includes(b);
+  }), 'every chapter should inherit exactly its book\'s division');
+  for (const d of model.divisions) {
+    const B = d.bounds;
+    console.assert(d.books.every((b) => b.x >= B.x - EPS && b.y >= B.y - EPS &&
+      b.x + b.width <= B.x + B.width + EPS && b.y + b.height <= B.y + B.height + EPS), `${d.name}: bounds should contain its books`);
+    console.assert(d.outline.length >= 4, `${d.name}: should have an outline`);
+    // An outer edge has its own division on exactly one side.
+    const inside = (x, y) => d.books.some((b) => x > b.x && x < b.x + b.width && y > b.y && y < b.y + b.height);
+    console.assert(d.outline.every((sg) => {
+      const mx = (sg.x1 + sg.x2) / 2, my = (sg.y1 + sg.y2) / 2, h = sg.y1 === sg.y2, e = .01;
+      return inside(h ? mx : mx - e, h ? my - e : my) !== inside(h ? mx : mx + e, h ? my + e : my);
+    }), `${d.name}: outline should separate inside from outside`);
+  }
+
   const noVerses = model.chapters.filter((c) => !c.verses).map((c) => `${c.bookKey} ${c.chapter}`);
   if (noVerses.length) console.warn('No verse count for:', noVerses.join(', '));
 }
@@ -425,14 +569,24 @@ function starScale(c) {
   return Math.max(.4, Math.sqrt(c.verses / medianVerses));
 }
 
+const bookLines = [];
+// A region made of several rectangles, as one path (they never overlap).
+const regionPath = (rects) => rects.map(rectPath).join('');
+
 function drawWorld(model) {
   const counts = model.chapters.map((c) => c.verses).filter(Boolean).sort((a, b) => a - b);
   if (counts.length) medianVerses = counts[counts.length >> 1];
   $('chapter-lines').setAttribute('d', model.chapters.map(rectPath).join(''));
   $('testament-lines').setAttribute('d', model.testaments.map(rectPath).join(''));
+  // Only the edges where one division meets another are promoted; edges
+  // between books of the same division stay ordinary book boundaries.
+  $('division-lines').setAttribute('d', model.divisions
+    .flatMap((d) => d.outline.filter((sg) => sg.betweenDivisions))
+    .map((sg) => `M${sg.x1} ${sg.y1}L${sg.x2} ${sg.y2}`).join(''));
   // One border path and one star path per book, so each can take its colour.
   for (const b of model.books) {
     const line = svgEl('path', { d: rectPath(b) }, $('book-lines'));
+    bookLines[b.index] = line;
     tint(line, b);
     line.classList.toggle('tinted', !!colourOf(b));
     // Zero-length round-capped segments: every star is a screen-sized dot.
@@ -539,6 +693,14 @@ function placeStar(el, c) {
 // Everything that depends on hover / selection / focus state.
 function renderState() {
   const hb = state.hover ? MODEL.books[state.hover.bookIndex] : null;
+  const hd = state.hover ? MODEL.divisions[state.hover.divisionIndex] : null;
+
+  // Division: a faint wash over exactly its books, and their own colours
+  // brought up a little — "these books belong together".
+  $('hover-division-fill').classList.toggle('on', !!hd);
+  if (hd) $('hover-division-fill').setAttribute('d', regionPath(hd.books));
+  MODEL.books.forEach((b) => bookLines[b.index].classList.toggle('lit', !!hd && b.divisionIndex === hd.index));
+
   $('hover-book-fill').classList.toggle('on', !!hb);
   $('hover-book-line').classList.toggle('on', !!hb);
   if (hb) { setRect($('hover-book-fill'), hb); setRect($('hover-book-line'), hb); }
@@ -559,25 +721,38 @@ function renderState() {
   labels.testaments.forEach(({ t, el }) => el.classList.toggle('selected', !!s && s.testamentId === t.id));
   syncSelectionClasses();
 
-  // Focus veil: dim the world outside what we are looking at.
-  const f = focusRect();
-  $('focus-veil').classList.toggle('on', !!f);
-  if (f) $('focus-veil').setAttribute('d', `M-1e5 -1e5H1e5V1e5H-1e5z${rectPath(f)}`);
+  // Focus veil: dim the world outside what we are looking at. The hole is
+  // the focus's true shape (a division is the union of its books).
+  const region = focusRegion();
+  $('focus-veil').classList.toggle('on', !!region);
+  if (region) $('focus-veil').setAttribute('d', `M-1e5 -1e5H1e5V1e5H-1e5z${regionPath(region)}`);
 
   $('hint').classList.toggle('away', state.focus.level !== 'bible');
 
-  $('info').innerHTML = s
-    ? `<div>${s.testament}</div><div>${s.book}</div><div>Chapter ${s.chapter}</div>` : '';
+  // Selection context. The division and book lines are also ways in.
+  const info = $('info');
+  info.replaceChildren();
+  if (s) {
+    const sb = MODEL.books[s.bookIndex], sd = MODEL.divisions[s.divisionIndex];
+    [[s.testament], [sd.name, () => focusDivision(sd)], [sb.name, () => focusBook(sb)], [`Chapter ${s.chapter}`]]
+      .forEach(([text, go]) => {
+        const div = Object.assign(document.createElement('div'), { textContent: text });
+        if (go) { div.dataset.go = ''; div.onclick = go; }
+        info.appendChild(div);
+      });
+  }
 
-  const crumbs = [['The Bible', () => focusBible()]];
-  if (state.focus.book) crumbs.push([state.focus.book.name, () => focusBook(state.focus.book)]);
-  if (state.focus.chapter) crumbs.push([String(state.focus.chapter.chapter), () => {}]);
+  const f = state.focus, crumbs = [['The Bible', () => focusBible()]];
+  if (f.division) crumbs.push([f.division.testament, null], [f.division.name, () => focusDivision(f.division)]);
+  if (f.book) crumbs.push([f.book.name, () => focusBook(f.book)]);
+  if (f.chapter) crumbs.push([String(f.chapter.chapter), () => {}]);
   const nav = $('crumbs');
   nav.replaceChildren();
   crumbs.forEach(([text, go], i) => {
     if (i) nav.appendChild(Object.assign(document.createElement('i'), { textContent: '/' }));
     const span = Object.assign(document.createElement('span'), { textContent: text });
     if (i === crumbs.length - 1) span.className = 'current';
+    else if (!go) span.className = 'static';
     else span.onclick = (e) => { e.stopPropagation(); go(); };
     nav.appendChild(span);
   });
@@ -599,31 +774,42 @@ function syncSelectionClasses() {
 const state = {
   hover: null,                                     // chapter under the pointer
   selected: null,                                  // selected chapter
-  focus: { level: 'bible', book: null, chapter: null },
+  // level: 'bible' | 'division' | 'book' | 'chapter'
+  focus: { level: 'bible', division: null, book: null, chapter: null },
 };
 
-function focusRect() {
-  if (state.focus.level === 'chapter') return state.focus.chapter;
-  if (state.focus.level === 'book') return state.focus.book;
+// The focused region's true shape, as rectangles (null: the whole Bible).
+function focusRegion() {
+  const f = state.focus;
+  if (f.level === 'chapter') return [f.chapter];
+  if (f.level === 'book') return [f.book];
+  if (f.level === 'division') return f.division.books;
   return null;
 }
 
 function cameraForFocus() {
-  if (state.focus.level === 'chapter') return frame(state.focus.chapter, { pad: 96, fill: .42 });
-  if (state.focus.level === 'book') return frame(state.focus.book, { pad: 88, fill: .72 });
+  const f = state.focus;
+  if (f.level === 'chapter') return frame(f.chapter, { pad: 96, fill: .42 });
+  if (f.level === 'book') return frame(f.book, { pad: 88, fill: .72 });
+  if (f.level === 'division') return frame(f.division.bounds, { pad: 80, fill: .9 });
   return frame(WORLD, OVERVIEW_FRAME);
 }
 
-function setFocus(level, book = null, chapter = null) {
+function setFocus(level, { division = null, book = null, chapter = null } = {}) {
   const bookChanged = state.focus.book !== book;
-  state.focus = { level, book, chapter };
+  state.focus = { level, division, book, chapter };
   if (bookChanged) showChapterNumbers(book);
   renderState();
   flyTo(cameraForFocus());
 }
-const focusBible   = () => setFocus('bible');
-const focusBook    = (b) => setFocus('book', b);
-const focusChapter = (c) => setFocus('chapter', MODEL.books[c.bookIndex], c);
+const divisionOf    = (b) => MODEL.divisions[b.divisionIndex];
+const focusBible    = () => setFocus('bible');
+const focusDivision = (d) => setFocus('division', { division: d });
+const focusBook     = (b) => setFocus('book', { division: divisionOf(b), book: b });
+const focusChapter  = (c) => {
+  const b = MODEL.books[c.bookIndex];
+  setFocus('chapter', { division: divisionOf(b), book: b, chapter: c });
+};
 
 function select(c) { state.selected = c; renderState(); }
 
@@ -631,6 +817,7 @@ const tooltip = $('tooltip');
 function showTooltip(c, sx, sy) {
   tooltip.classList.toggle('on', !!c);
   if (!c) return;
+  tooltip.querySelector('.d').textContent = c.division;
   tooltip.querySelector('.b').textContent = c.book;
   tint(tooltip, MODEL.books[c.bookIndex]);
   tooltip.querySelector('.c').textContent = `Chapter ${c.chapter}`;
@@ -651,14 +838,17 @@ function hitTest(sx, sy) {
   const f = state.focus;
   if (f.level === 'chapter') return c === f.chapter ? c : null;
   if (f.level === 'book') return c && c.bookIndex === f.book.index ? c : null;
+  if (f.level === 'division') return c && c.divisionIndex === f.division.index ? c : null;
   return c;
 }
 
-// Step back out one level: chapter → book → Bible → no selection.
+// Step back out one level: chapter → book → division → Bible → no selection.
+// Leaving a book therefore lands in its division: the way divisions are met.
 function stepOut() {
   const f = state.focus;
   if (f.level === 'chapter') focusBook(f.book);
-  else if (f.level === 'book') focusBible();
+  else if (f.level === 'book') focusDivision(f.division);
+  else if (f.level === 'division') focusBible();
   else select(null);
 }
 
@@ -684,7 +874,7 @@ svg.addEventListener('click', (e) => {
   if (c !== state.selected) { select(c); return; }   // first click selects
 
   // Second click on the selected chapter enters one level deeper.
-  if (!f.book) focusBook(MODEL.books[c.bookIndex]);
+  if (!f.book) focusBook(MODEL.books[c.bookIndex]);       // from the Bible or a division
   else if (f.chapter !== c) focusChapter(c);
 });
 
@@ -707,8 +897,9 @@ addEventListener('resize', () => {
 async function start() {
   try {
     const [bible, colours] = await Promise.all([loadBible('bible.json'), loadColours('colours.json')]);
-    MODEL = layoutBible(bible, WORLD);
+    MODEL = buildModel(bible, WORLD);
     COLOURS = colours;
+    checkModel(MODEL, bible);
   } catch (err) {
     console.error(err);
     $('info').innerHTML = location.protocol === 'file:'
@@ -716,7 +907,6 @@ async function start() {
       : `<div>Could not load bible.json</div><div>${err.message}</div>`;
     return;
   }
-  checkModel(MODEL);
   if (CONFIG.colours) {
     const missing = MODEL.books.filter((b) => !COLOURS[b.key]).map((b) => b.key);
     if (missing.length) console.warn('No colour for:', missing.join(', '));
