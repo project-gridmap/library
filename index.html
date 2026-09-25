@@ -42,45 +42,9 @@
   #safe { position: fixed; visibility: hidden; pointer-events: none;
     padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left); }
 
-  /* world-space geometry: strokes stay hairline at every zoom */
-  #world path, #world rect { vector-effect: non-scaling-stroke; }
-  #chapter-lines   { fill: none; stroke: var(--line-ch); stroke-width: 1; }
-  /* --c is a book's colour from colours.json; unset means monochrome. */
-  #book-lines path { fill: none; stroke: var(--c, var(--line-bk)); stroke-width: 1; }
-  #book-lines path.tinted { stroke-opacity: .7; }
-  #book-lines path.lit    { stroke-opacity: 1; transition: stroke-opacity 180ms; }
-  #division-lines  { fill: none; stroke: var(--line-dv); stroke-width: 1.25; stroke-linecap: square; }
-  #testament-lines { fill: none; stroke: var(--line-ts); stroke-width: 1.5; }
-  #stars           { fill: none; stroke-linecap: round; }
-  #stars path      { stroke: var(--c, var(--ink)); stroke-width: calc(var(--dot) * var(--s, 1)); }
-  /* Chapter numbers as centre marks: world-space text, sized per chapter
-     (--fs, world units) and damped as you zoom in (--nz) so they grow with
-     the map but never shout. */
-  #numbers text {
-    fill: var(--c, var(--ink)); font-family: var(--font);
-    text-anchor: middle; dominant-baseline: central;
-    font-size: calc(var(--fs) * var(--nz, 1) * 1px);
-  }
-  #numbers text.hover, #numbers text.selected { fill-opacity: 1; font-weight: 500; }
-  /* Stars or numbers, never both at rest: a quick fade when the zoom
-     crosses the legibility threshold. */
-  #stars, #numbers { transition: opacity 220ms; }
-  #numbers, #map.numbers-on #stars { opacity: 0; }
-  #map.numbers-on #numbers { opacity: 1; }
-
-  #hover-division-fill { fill: var(--ink); opacity: 0; transition: opacity 240ms; }
-  #hover-division-fill.on { opacity: .018; }
-  #hover-book-fill  { fill: var(--ink); opacity: 0; transition: opacity 180ms; }
-  #hover-book-line  { fill: none; stroke: var(--c, var(--ink)); stroke-width: 1; opacity: 0; transition: opacity 180ms; }
-  #hover-book-fill.on { opacity: .028; }
-  #hover-book-line.on { opacity: 1; }
-  #hover-chapter    { fill: var(--ink); opacity: 0; }
-  #hover-chapter.on { opacity: .07; }
-
-  #sel-book         { fill: none; stroke: var(--c, var(--ink)); stroke-width: 1.5; }
-  #sel-chapter      { fill: var(--c, var(--ink)); fill-opacity: .1; stroke: var(--c, var(--ink)); stroke-width: 1; }
-  #focus-veil       { fill: var(--bg); fill-rule: evenodd; opacity: 0; transition: opacity 500ms; pointer-events: none; }
-  #focus-veil.on    { opacity: .66; }
+  /* The world is painted on this canvas (see paint()); the SVG above it
+     holds only screen-space labels and rings, and takes the gestures. */
+  #world-canvas { position: fixed; inset: 0; width: 100%; height: 100%; pointer-events: none; }
 
   /* screen-space overlay: labels and star emphasis */
   #overlay text { font-family: var(--font); pointer-events: none; }
@@ -100,7 +64,7 @@
   #hover-star  { fill: var(--c, var(--ink)); }
   #hover-halo  { fill: none; stroke: var(--c, var(--ink)); stroke-opacity: .35; }
   #sel-ring    { fill: none; stroke: var(--c, var(--ink)); stroke-width: 1; }
-  body.no-marks :is(#stars, #numbers, #hover-star, #hover-halo, #sel-ring, #chapter-nums) { display: none; }
+  body.no-marks :is(#hover-star, #hover-halo, #sel-ring, #chapter-nums) { display: none; }
 
   /* chrome: almost none */
   .chrome { position: fixed; font-size: var(--chrome-px); letter-spacing: .22em; text-transform: uppercase; line-height: 1.9; }
@@ -202,11 +166,6 @@
     #guess-btn { min-height: 34px; margin-top: 6px; }
   }
 
-  /* World layers: what the guesses have ruled out, and the guesses themselves. */
-  #ruled-out   { fill: var(--bg); opacity: .62; pointer-events: none; }
-  #guess-cells { fill: none; stroke: var(--ink); stroke-width: 1.25; stroke-dasharray: 3 2; }
-  #answer-cell { fill: var(--c, var(--ink)); fill-opacity: .12; stroke: var(--c, var(--ink)); stroke-width: 2; }
-
   #tooltip {
     position: fixed; pointer-events: none; opacity: 0; transition: opacity 120ms;
     font-size: var(--chrome-px); letter-spacing: .16em; text-transform: uppercase; line-height: 1.6;
@@ -219,25 +178,8 @@
 </head>
 <body>
 
+<canvas id="world-canvas"></canvas>
 <svg id="map" xmlns="http://www.w3.org/2000/svg">
-  <g id="world">
-    <path id="hover-division-fill"/>
-    <rect id="hover-book-fill"/>
-    <rect id="hover-chapter"/>
-    <path id="chapter-lines"/>
-    <g id="book-lines"></g>
-    <path id="division-lines"/>
-    <path id="testament-lines"/>
-    <rect id="hover-book-line"/>
-    <rect id="sel-book" visibility="hidden"/>
-    <rect id="sel-chapter" visibility="hidden"/>
-    <g id="stars"></g>
-    <g id="numbers"></g>
-    <path id="ruled-out"/>
-    <path id="guess-cells"/>
-    <path id="answer-cell"/>
-    <path id="focus-veil"/>
-  </g>
   <g id="overlay">
     <g id="testament-labels"></g>
     <g id="book-labels"></g>
@@ -730,7 +672,7 @@ let flight = null;
 function flyTo(target, duration = REDUCED_MOTION ? 0 : 850) {
   cancelAnimationFrame(flight);
   camera.free = false;
-  if (!duration) { Object.assign(camera, target); renderCamera(); refreshHover(); return; }
+  if (!duration) { Object.assign(camera, target); renderNow(); refreshHover(); return; }
   const from = { ...camera }, t0 = performance.now();
   const ease = (t) => (t < .5 ? 4 * t * t * t : 1 - (-2 * t + 2) ** 3 / 2);
   const step = (now) => {
@@ -738,7 +680,7 @@ function flyTo(target, duration = REDUCED_MOTION ? 0 : 850) {
     camera.k  = from.k * (target.k / from.k) ** e;       // zoom geometrically
     camera.cx = from.cx + (target.cx - from.cx) * e;
     camera.cy = from.cy + (target.cy - from.cy) * e;
-    renderCamera();
+    renderNow();
     if (t < 1) flight = requestAnimationFrame(step);
     else refreshHover();                                // the world moved under the pointer
   };
@@ -748,18 +690,16 @@ function flyTo(target, duration = REDUCED_MOTION ? 0 : 850) {
 
 /* =====================================================================
    5. RENDERING
-   Static world geometry is drawn once per layout; the camera is a single
-   transform. Labels and stars live in screen space so they stay crisp,
-   and reveal themselves as the camera gets close enough to read them.
+   The world (grid, borders, marks, highlights, veils) is painted onto a
+   single <canvas>, only what is on screen, at most once per animation
+   frame. There is no per-chapter DOM for the browser to restyle or lay
+   out, which is what keeps pinch and pan smooth on phones. Labels, rings
+   and the chrome stay in a thin screen-space SVG overlay above it, and
+   reveal themselves as the camera gets close enough to read them.
    ===================================================================== */
 
 const $ = (id) => document.getElementById(id);
 const SVG_NS = 'http://www.w3.org/2000/svg';
-const rectPath = (r) => `M${r.x} ${r.y}h${r.width}v${r.height}h${-r.width}z`;
-const setRect = (el, r) => {
-  el.setAttribute('x', r.x); el.setAttribute('y', r.y);
-  el.setAttribute('width', r.width); el.setAttribute('height', r.height);
-};
 const svgEl = (tag, attrs = {}, parent) => {
   const el = document.createElementNS(SVG_NS, tag);
   for (const k in attrs) el.setAttribute(k, attrs[k]);
@@ -798,68 +738,211 @@ const useNumbers = () => CONFIG.centreMark === 'number';
 // flicker. Numbers stop growing once a typical one reaches NUMBER_MAX_PX.
 const NUMBER_HYSTERESIS_PX = .75, NUMBER_MAX_PX = 24;
 let numbersOn = false;
-
-// Swap stars ↔ numbers: show the incoming layer, fade across (CSS), then
-// take the outgoing layer out of rendering entirely (display: none).
-const MARK_FADE_MS = 220;
-let markFade = null;
-function showMarkLayer() {
-  clearTimeout(markFade);
-  $(numbersOn ? 'numbers' : 'stars').style.display = '';
-  requestAnimationFrame(() => svg.classList.toggle('numbers-on', numbersOn));   // after it's displayed, so it fades
-  markFade = setTimeout(() => { $(numbersOn ? 'stars' : 'numbers').style.display = 'none'; }, MARK_FADE_MS + 40);
+function updateMarkMode() {
+  if (!useNumbers()) { numbersOn = false; return; }
+  const typicalPx = medianNumberSize * camera.k;
+  numbersOn = numbersOn ? typicalPx >= CONFIG.numberMinPx - NUMBER_HYSTERESIS_PX : typicalPx >= CONFIG.numberMinPx;
 }
+// Stars grow a little as you approach, but stay stars (CSS px diameter).
+const starDot = () => Math.min(7, 3 * (camera.k / frame(MODEL.world).k) ** .28);
+// Numbers grow with the map until a typical one reaches NUMBER_MAX_PX.
+const numberDamping = () => Math.min(1, NUMBER_MAX_PX / (medianNumberSize * camera.k));
 
-const bookLines = [];
-// A region made of several rectangles, as one path (they never overlap).
-const regionPath = (rects) => rects.map(rectPath).join('');
-
-function drawWorld(model) {
+// Per-layout values the painter needs, prepared once per layout.
+const prepared = { fs: [], s: [], divisionSegments: [] };
+let medianNumberSize = 1;
+function prepareWorld(model) {
   const counts = model.chapters.map((c) => c.verses).filter(Boolean).sort((a, b) => a - b);
   if (counts.length) {
     medianVerses = counts[counts.length >> 1];
     referenceVerses = counts[Math.floor((counts.length - 1) * .99)];
   }
-  $('chapter-lines').setAttribute('d', model.chapters.map(rectPath).join(''));
-  $('testament-lines').setAttribute('d', model.testaments.map(rectPath).join(''));
+  prepared.fs = model.chapters.map(numberSize);
+  prepared.s = model.chapters.map(starScale);
   // Only the edges where one division meets another are promoted; edges
   // between books of the same division stay ordinary book boundaries.
-  $('division-lines').setAttribute('d', model.divisions
-    .flatMap((d) => d.outline.filter((sg) => sg.betweenDivisions))
-    .map((sg) => `M${sg.x1} ${sg.y1}L${sg.x2} ${sg.y2}`).join(''));
-  // One border path, one star group and one number group per book, so
-  // each can take its colour.
-  $('book-lines').replaceChildren();
-  $('stars').replaceChildren();
-  $('numbers').replaceChildren();
-  bookLines.length = 0;
-  numberEls.length = 0;
-  for (const b of model.books) {
-    const line = svgEl('path', { d: rectPath(b) }, $('book-lines'));
-    bookLines[b.index] = line;
-    tint(line, b);
-    line.classList.toggle('tinted', !!colourOf(b));
-    // Zero-length round-capped segments: every star is a screen-sized dot.
-    const stars = svgEl('g', {}, $('stars'));
-    tint(stars, b);
-    for (const c of b.chapters) {
-      svgEl('path', { d: `M${c.centerX} ${c.centerY}h.001`, style: `--s:${starScale(c)}` }, stars);
+  prepared.divisionSegments = model.divisions.flatMap((d) => d.outline.filter((sg) => sg.betweenDivisions));
+  const sizes = [...prepared.fs].sort((a, b) => a - b);
+  medianNumberSize = sizes[sizes.length >> 1];
+}
+
+// --- Palette: the CSS custom properties, read once ---
+
+const palette = {};
+function readPalette() {
+  const cs = getComputedStyle(document.documentElement);
+  for (const name of ['bg', 'ink', 'line-ch', 'line-bk', 'line-dv', 'line-ts', 'font']) {
+    palette[name] = cs.getPropertyValue(`--${name}`).trim();
+  }
+}
+
+// --- Fades: what CSS transitions did for the SVG, done per frame ---
+
+const fades = new Map();
+function fade(name, target, ms) {
+  const now = performance.now();
+  let f = fades.get(name);
+  if (!f) fades.set(name, f = { value: target, from: target, target, t0: now, ms });
+  if (f.target !== target) Object.assign(f, { from: f.value, target, t0: now, ms });
+  const p = REDUCED_MOTION || !f.ms ? 1 : Math.min(1, (now - f.t0) / f.ms);
+  f.value = f.from + (f.target - f.from) * p;
+  if (p < 1) renderCamera();                  // keep painting until it settles
+  return f.value;
+}
+// What a fading-out highlight was showing, so it can fade rather than vanish.
+const lastShown = {};
+const remember = (key, value) => (value ? (lastShown[key] = value) : lastShown[key]);
+
+// --- Canvas ---
+
+const canvas = $('world-canvas');
+const ctx = canvas.getContext('2d');
+let dpr = 1;
+function sizeCanvas() {
+  dpr = Math.min(window.devicePixelRatio || 1, 3);
+  canvas.width = Math.round(viewport.w * dpr);
+  canvas.height = Math.round(viewport.h * dpr);
+}
+
+// Layers painted by things built on the map (the game), just under the veil.
+const worldLayers = [];
+
+function paint() {
+  const k = camera.k, W = viewport.w, H = viewport.h;
+  const ox = W / 2 - camera.cx * k, oy = H / 2 - camera.cy * k;
+  const X = (x) => x * k + ox, Y = (y) => y * k + oy;
+  const rect = (r) => ctx.rect(X(r.x), Y(r.y), r.width * k, r.height * k);
+  // The world rectangle currently on screen, for culling.
+  const wx0 = -ox / k, wy0 = -oy / k, wx1 = (W - ox) / k, wy1 = (H - oy) / k;
+  const onScreen = (r) => r.x < wx1 && r.x + r.width > wx0 && r.y < wy1 && r.y + r.height > wy0;
+  const books = MODEL.books.filter(onScreen);
+  const colour = (b, fallback) => colourOf(b) || fallback;
+
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, W, H);
+  ctx.globalAlpha = 1;
+  ctx.setLineDash([]);
+
+  // Hover: division wash, book wash, chapter wash (under the lines).
+  const hover = state.hover;
+  const hd = hover ? MODEL.divisions[hover.divisionIndex] : null;
+  const hb = hover ? MODEL.books[hover.bookIndex] : null;
+  const divA = fade('hover-division', hd ? 1 : 0, 240), shownDiv = remember('division', hd);
+  if (divA > 0 && shownDiv) {
+    ctx.globalAlpha = .018 * divA; ctx.fillStyle = palette.ink;
+    ctx.beginPath(); shownDiv.books.forEach(rect); ctx.fill();
+  }
+  const bookA = fade('hover-book', hb ? 1 : 0, 180), shownBook = remember('book', hb);
+  if (bookA > 0 && shownBook) {
+    ctx.globalAlpha = .028 * bookA; ctx.fillStyle = palette.ink;
+    ctx.beginPath(); rect(shownBook); ctx.fill();
+  }
+  if (hover) {
+    ctx.globalAlpha = .07; ctx.fillStyle = palette.ink;
+    ctx.beginPath(); rect(hover); ctx.fill();
+  }
+
+  // Chapter lines, fading in once cells are big enough not to become a haze.
+  const lineA = Math.min(1, Math.max(0, (MODEL.chapterSide * k - 6) / 6));
+  if (lineA > 0) {
+    ctx.globalAlpha = lineA; ctx.strokeStyle = palette['line-ch']; ctx.lineWidth = 1;
+    ctx.beginPath();
+    for (const b of books) for (const c of b.chapters) if (onScreen(c)) rect(c);
+    ctx.stroke();
+  }
+
+  // Book borders in their colour; a hovered division's books brighten.
+  const litA = fade('lit', hd ? 1 : 0, 180), litDiv = remember('lit', hd);
+  ctx.lineWidth = 1;
+  for (const b of books) {
+    const c = colourOf(b);
+    const lit = litDiv && b.divisionIndex === litDiv.index ? litA : 0;
+    ctx.globalAlpha = c ? .7 + .3 * lit : 1;
+    ctx.strokeStyle = c || palette['line-bk'];
+    ctx.beginPath(); rect(b); ctx.stroke();
+  }
+
+  // Division boundaries, then testament boundaries: stronger, then strongest.
+  ctx.globalAlpha = 1;
+  ctx.strokeStyle = palette['line-dv']; ctx.lineWidth = 1.25; ctx.lineCap = 'square';
+  ctx.beginPath();
+  for (const sg of prepared.divisionSegments) { ctx.moveTo(X(sg.x1), Y(sg.y1)); ctx.lineTo(X(sg.x2), Y(sg.y2)); }
+  ctx.stroke();
+  ctx.lineCap = 'butt';
+  ctx.strokeStyle = palette['line-ts']; ctx.lineWidth = 1.5;
+  ctx.beginPath(); MODEL.testaments.forEach(rect); ctx.stroke();
+
+  // Hovered book outline.
+  if (bookA > 0 && shownBook) {
+    ctx.globalAlpha = bookA; ctx.strokeStyle = colour(shownBook, palette.ink); ctx.lineWidth = 1;
+    ctx.beginPath(); rect(shownBook); ctx.stroke();
+  }
+
+  // Selection: its book outlined, the chapter filled and outlined.
+  const sel = state.selected;
+  if (sel) {
+    const sb = MODEL.books[sel.bookIndex], c = colour(sb, palette.ink);
+    ctx.globalAlpha = 1; ctx.strokeStyle = c; ctx.lineWidth = 1.5;
+    ctx.beginPath(); rect(sb); ctx.stroke();
+    ctx.fillStyle = c; ctx.globalAlpha = .1;
+    ctx.beginPath(); rect(sel); ctx.fill();
+    ctx.globalAlpha = 1; ctx.lineWidth = 1; ctx.stroke();
+  }
+
+  // Centre marks: stars, crossfading to numbers once numbers are legible.
+  if (CONFIG.showMarks) {
+    const numA = fade('numbers', numbersOn ? 1 : 0, 220);
+    if (numA < 1) {
+      const dot = starDot();
+      ctx.globalAlpha = (1 - numA) * CONFIG.markOpacity;
+      for (const b of books) {
+        ctx.fillStyle = colour(b, palette.ink);
+        ctx.beginPath();
+        for (const c of b.chapters) {
+          const r = dot * prepared.s[c.index] / 2, x = X(c.centerX), y = Y(c.centerY);
+          if (x < -r || y < -r || x > W + r || y > H + r) continue;
+          ctx.moveTo(x + r, y); ctx.arc(x, y, r, 0, Math.PI * 2);
+        }
+        ctx.fill();
+      }
     }
-    if (!useNumbers()) continue;
-    const numbers = svgEl('g', {}, $('numbers'));
-    tint(numbers, b);
-    for (const c of b.chapters) {
-      const el = svgEl('text', { x: c.centerX, y: c.centerY, style: `--fs:${numberSize(c)}` }, numbers);
-      el.textContent = c.chapter;
-      numberEls[c.index] = el;
+    if (numA > 0) {
+      const nz = numberDamping();
+      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      let font = '';
+      for (const b of books) {
+        ctx.fillStyle = colour(b, palette.ink);
+        for (const c of b.chapters) {
+          if (!onScreen(c)) continue;
+          const px = Math.round(prepared.fs[c.index] * k * nz * 2) / 2;
+          if (px < 2) continue;
+          const strong = c === sel || c === hover;     // hovered and selected numbers brighten
+          const f = `${strong ? 500 : 400} ${px}px ${palette.font}`;
+          if (f !== font) { ctx.font = f; font = f; }
+          ctx.globalAlpha = numA * (strong ? 1 : CONFIG.markOpacity);
+          ctx.fillText(c.chapter, X(c.centerX), Y(c.centerY));
+        }
+      }
     }
   }
-  const sizes = model.chapters.map(numberSize).sort((a, b) => a - b);
-  medianNumberSize = sizes[sizes.length >> 1];
-  markNz = markDot = null;
+
+  // Layers from things built on the map (the game).
+  for (const layer of worldLayers) {
+    ctx.globalAlpha = 1; ctx.setLineDash([]);
+    layer({ ctx, rect, colour, palette });
+  }
+
+  // Focus veil: dim the world outside what we are looking at. The hole is
+  // the focus's true shape (a division is the union of its books).
+  const region = focusRegion();
+  const veilA = fade('veil', region ? 1 : 0, 500), shownRegion = remember('region', region);
+  if (veilA > 0 && shownRegion) {
+    ctx.globalAlpha = .66 * veilA; ctx.fillStyle = palette.bg;
+    ctx.beginPath(); ctx.rect(0, 0, W, H); shownRegion.forEach(rect);
+    ctx.fill('evenodd');
+  }
+  ctx.globalAlpha = 1;
 }
-const numberEls = [];
-let medianNumberSize = 1, markNz = null, markDot = null;
 
 // Label measurement (for "only where space permits").
 const measureCtx = document.createElement('canvas').getContext('2d');
@@ -913,37 +996,9 @@ function measureLabels() {
   });
 }
 
-// Everything that depends on the camera. Called every animation frame.
-function renderCamera() {
-  if (!MODEL) return;
+// The screen-space overlay: labels and rings, positioned for the camera.
+function renderOverlay() {
   const k = camera.k, px = labelPx();
-  $('world').setAttribute('transform',
-    `translate(${viewport.w / 2 - camera.cx * k} ${viewport.h / 2 - camera.cy * k}) scale(${k})`);
-
-  // Stars grow a little as you approach, but stay stars. The size moves in
-  // half-pixel steps: every change restyles all 1,189 stars, so it must not
-  // change on every frame of a pinch.
-  const overviewK = frame(MODEL.world).k;
-  const dot = Math.round(Math.min(7, 3 * (k / overviewK) ** .28) * 2) / 2;
-  if (dot !== markDot) { $('stars').style.setProperty('--dot', `${dot}px`); markDot = dot; }
-
-  // Number marks: numbers once a typical number is legible, stars below
-  // that; and damp their growth beyond NUMBER_MAX_PX.
-  let nz = 1;
-  if (useNumbers()) {
-    const typicalPx = medianNumberSize * k;
-    const on = numbersOn ? typicalPx >= CONFIG.numberMinPx - NUMBER_HYSTERESIS_PX : typicalPx >= CONFIG.numberMinPx;
-    if (on !== numbersOn) { numbersOn = on; showMarkLayer(); }
-    // Damping in sixth-of-an-octave steps (~12%), for the same reason as
-    // the star size; rounded down so numbers never exceed the cap.
-    const raw = NUMBER_MAX_PX / typicalPx;
-    nz = raw >= 1 ? 1 : 2 ** (Math.floor(Math.log2(raw) * 6) / 6);
-    if (nz !== markNz) { $('numbers').style.setProperty('--nz', nz); markNz = nz; }
-  }
-
-  // Chapter lines fade in once cells are big enough not to become a haze.
-  const cellPx = MODEL.chapterSide * k;
-  $('chapter-lines').style.opacity = Math.min(1, Math.max(0, (cellPx - 6) / 6));
 
   for (const l of labels.testaments) {
     const { t, el } = l;
@@ -965,8 +1020,8 @@ function renderCamera() {
     if (mode) g.setAttribute('transform', `translate(${toScreenX(b.x) + 5} ${toScreenY(b.y)})`);
   }
 
-  // Only chapters that are on screen and large enough get their number.
-  const reveal = cellPx >= 20;
+  // Star marks only: chapters on screen and large enough get a corner number.
+  const reveal = MODEL.chapterSide * k >= 20;
   for (const l of labels.chapters) {
     const c = l.c;
     let on = false;
@@ -982,11 +1037,11 @@ function renderCamera() {
     if (on !== l.on) { l.el.setAttribute('visibility', on ? 'visible' : 'hidden'); l.on = on; }
   }
 
-  // Emphasis: over stars, a brighter star and halo; over numbers, the number
-  // itself brightens (see syncMarkClasses) and the ring circles it.
-  const overNumbers = numbersOn;
-  placeStar($('hover-star'), overNumbers ? null : state.hover);
-  placeStar($('hover-halo'), overNumbers ? null : state.hover);
+  // Emphasis: over stars, a brighter star and halo; over numbers, the
+  // number itself brightens (painted) and the ring circles it.
+  const dot = starDot(), nz = numberDamping();
+  placeStar($('hover-star'), numbersOn ? null : state.hover);
+  placeStar($('hover-halo'), numbersOn ? null : state.hover);
   placeStar($('sel-ring'), state.selected);
   const starRadius = (c) => (c ? dot * starScale(c) / 2 : 0);
   const numberRadius = (c) => {
@@ -996,7 +1051,7 @@ function renderCamera() {
   };
   $('hover-star').setAttribute('r', starRadius(state.hover) + 1.2);
   $('hover-halo').setAttribute('r', starRadius(state.hover) + 7);
-  $('sel-ring').setAttribute('r', (overNumbers ? numberRadius(state.selected) + 5 : starRadius(state.selected) + 6));
+  $('sel-ring').setAttribute('r', (numbersOn ? numberRadius(state.selected) + 5 : starRadius(state.selected) + 6));
 }
 
 function placeStar(el, c) {
@@ -1004,29 +1059,31 @@ function placeStar(el, c) {
   if (c) { el.setAttribute('cx', toScreenX(c.centerX)); el.setAttribute('cy', toScreenY(c.centerY)); }
 }
 
-// Everything that depends on hover / selection / focus state.
+// Draw now: the world and its overlay, for the current camera and state.
+function renderNow() {
+  if (!MODEL) return;
+  frameRequested = false;
+  updateMarkMode();
+  paint();
+  renderOverlay();
+}
+// The camera or something drawn changed: draw once, on the next frame,
+// however many changes arrive before it (a pinch sends many).
+let frameRequested = false;
+function renderCamera() {
+  if (frameRequested) return;
+  frameRequested = true;
+  requestAnimationFrame(renderNow);
+}
+
+// Everything that depends on hover / selection / focus state (outside the
+// canvas, which reads the state itself when it paints).
 function renderState() {
   const hb = state.hover ? MODEL.books[state.hover.bookIndex] : null;
-  const hd = state.hover ? MODEL.divisions[state.hover.divisionIndex] : null;
-
-  // Division: a faint wash over exactly its books, and their own colours
-  // brought up a little — "these books belong together".
-  $('hover-division-fill').classList.toggle('on', !!hd);
-  if (hd) $('hover-division-fill').setAttribute('d', regionPath(hd.books));
-  MODEL.books.forEach((b) => bookLines[b.index].classList.toggle('lit', !!hd && b.divisionIndex === hd.index));
-
-  $('hover-book-fill').classList.toggle('on', !!hb);
-  $('hover-book-line').classList.toggle('on', !!hb);
-  if (hb) { setRect($('hover-book-fill'), hb); setRect($('hover-book-line'), hb); }
-  for (const id of ['hover-book-line', 'hover-star', 'hover-halo']) tint($(id), hb);
-  $('hover-chapter').classList.toggle('on', !!state.hover);
-  if (state.hover) setRect($('hover-chapter'), state.hover);
+  for (const id of ['hover-star', 'hover-halo']) tint($(id), hb);
 
   const s = state.selected;
-  $('sel-chapter').setAttribute('visibility', s ? 'visible' : 'hidden');
-  $('sel-book').setAttribute('visibility', s ? 'visible' : 'hidden');
-  if (s) { setRect($('sel-chapter'), s); setRect($('sel-book'), MODEL.books[s.bookIndex]); }
-  for (const id of ['sel-book', 'sel-chapter', 'sel-ring']) tint($(id), s && MODEL.books[s.bookIndex]);
+  tint($('sel-ring'), s && MODEL.books[s.bookIndex]);
 
   labels.books.forEach(({ b, el }) => {
     el.classList.toggle('hover', hb === b);
@@ -1034,12 +1091,6 @@ function renderState() {
   });
   labels.testaments.forEach(({ t, el }) => el.classList.toggle('selected', !!s && s.testamentId === t.id));
   syncSelectionClasses();
-
-  // Focus veil: dim the world outside what we are looking at. The hole is
-  // the focus's true shape (a division is the union of its books).
-  const region = focusRegion();
-  $('focus-veil').classList.toggle('on', !!region);
-  if (region) $('focus-veil').setAttribute('d', `M-1e5 -1e5H1e5V1e5H-1e5z${regionPath(region)}`);
 
   $('hint').classList.toggle('away', hintDismissed || state.focus.level !== 'bible' || !!s);
 
@@ -1080,29 +1131,17 @@ function renderState() {
   mapListeners.forEach((f) => f());
 }
 // Anything built on the map (the game) can follow its state here, and
-// redraw its own world layers whenever the world is (re)drawn.
+// recompute its own world layers whenever the world (layout) changes.
 const mapListeners = [], worldListeners = [];
 
+// Star marks only: the selected chapter's corner number brightens.
 let numSelected = null;
 function syncSelectionClasses() {
-  syncMarkClasses();
   const s = state.selected;
   if (s === numSelected) return;
   if (numSelected) labels.chapters[numSelected.index]?.el.classList.remove('selected');
   if (s) labels.chapters[s.index]?.el.classList.add('selected');
   numSelected = s;
-}
-
-// The hovered and selected chapters' numbers brighten.
-const marked = { hover: null, selected: null };
-function syncMarkClasses() {
-  for (const kind of ['hover', 'selected']) {
-    const now = state[kind];
-    if (now === marked[kind]) continue;
-    if (marked[kind]) numberEls[marked[kind].index]?.classList.remove(kind);
-    if (now) numberEls[now.index]?.classList.add(kind);
-    marked[kind] = now;
-  }
 }
 
 // Switch between the portrait and landscape worlds. Objects are carried
@@ -1117,9 +1156,9 @@ function useLayout(name) {
     state.hover = null;
     state.focus = { level: f.level, division: same('divisions', f.division),
                     book: same('books', f.book), chapter: same('chapters', f.chapter) };
+    for (const key in lastShown) delete lastShown[key];   // those belonged to the other layout
   }
-  marked.hover = marked.selected = null;
-  drawWorld(MODEL);
+  prepareWorld(MODEL);
   createLabels(MODEL);
   worldListeners.forEach((f) => f());
   cancelAnimationFrame(flight);
@@ -1442,6 +1481,7 @@ addEventListener('resize', () => {
   if (!MODEL) return;
   measureSafeArea();
   labelPxCache = null;
+  sizeCanvas();
   measureGameChrome();
   if (layoutFor() !== MODEL.layout) { useLayout(layoutFor()); return; }   // rotated
   // A mobile address bar showing or hiding only nudges the height: leave
@@ -1566,24 +1606,46 @@ function renderGuessButton() {
   btn.disabled = !enabled;
 }
 
-// --- Game rendering: world layers (redrawn whenever the world is) ---
+// --- Game rendering: world layers, painted into the map's canvas ---
+
+// Recomputed on every guess and whenever the world (layout) changes.
+const gameLayer = { ruledOut: [], guessed: [], answer: null };
 
 function renderGameMap() {
   if (!MODEL || !CONFIG.game.enabled) return;
   // Ruled out: whole books where every chapter is out, otherwise chapters.
-  let out = '';
+  const out = [];
   if (CONFIG.game.dimRuledOut && game.guesses.length && !game.over) {
     for (const b of MODEL.books) {
       const gone = b.chapters.filter((c) => !stillPossible(c));
-      out += gone.length === b.chapters.length ? rectPath(b) : gone.map(rectPath).join('');
+      if (gone.length === b.chapters.length) out.push(b); else out.push(...gone);
     }
   }
-  $('ruled-out').setAttribute('d', out);
   const answer = MODEL.chapters[game.answer];
-  $('guess-cells').setAttribute('d', game.guesses
-    .map((g) => MODEL.chapters[g.index]).filter((c) => c !== answer).map(rectPath).join(''));
-  $('answer-cell').setAttribute('d', game.over ? rectPath(answer) : '');
-  tint($('answer-cell'), game.over ? MODEL.books[answer.bookIndex] : null);
+  gameLayer.ruledOut = out;
+  gameLayer.guessed = game.guesses.map((g) => MODEL.chapters[g.index]).filter((c) => c !== answer);
+  gameLayer.answer = game.over ? answer : null;
+  renderCamera();
+}
+
+function paintGameLayers({ ctx, rect, colour, palette }) {
+  if (gameLayer.ruledOut.length) {
+    ctx.globalAlpha = .62; ctx.fillStyle = palette.bg;
+    ctx.beginPath(); gameLayer.ruledOut.forEach(rect); ctx.fill();
+  }
+  if (gameLayer.guessed.length) {
+    ctx.globalAlpha = 1; ctx.strokeStyle = palette.ink; ctx.lineWidth = 1.25; ctx.setLineDash([3, 2]);
+    ctx.beginPath(); gameLayer.guessed.forEach(rect); ctx.stroke();
+    ctx.setLineDash([]);
+  }
+  const a = gameLayer.answer;
+  if (a) {
+    const c = colour(MODEL.books[a.bookIndex], palette.ink);
+    ctx.fillStyle = c; ctx.strokeStyle = c;
+    ctx.beginPath(); rect(a);
+    ctx.globalAlpha = .12; ctx.fill();
+    ctx.globalAlpha = 1; ctx.lineWidth = 2; ctx.stroke();
+  }
 }
 
 // Screen space the game's chrome takes, so the map frames around it.
@@ -1599,6 +1661,7 @@ function startGame() {
   $('guess-btn').onclick = () => (game.over ? resetGame() : makeGuess());
   mapListeners.push(renderGuessButton);
   worldListeners.push(renderGameMap);
+  worldLayers.push(paintGameLayers);
   renderGame();
   measureGameChrome();
 }
@@ -1639,13 +1702,12 @@ async function start() {
     if (missing.length) console.warn('No colour for:', missing.join(', '));
   }
   document.body.classList.toggle('no-marks', !CONFIG.showMarks);
-  $('stars').style.strokeOpacity = CONFIG.markOpacity;
-  $('numbers').style.fillOpacity = CONFIG.markOpacity;
+  readPalette();
+  sizeCanvas();
   $('hint').textContent = COARSE
     ? 'tap to select · pinch to zoom · hold to scan'
     : 'click to select · again to enter · scroll to zoom · esc to return';
   measureSafeArea();
-  $('numbers').style.display = 'none';            // stars first; numbers join when legible
   if (CONFIG.game.enabled) { MODEL = MODELS[layoutFor()]; startGame(); }
   useLayout(layoutFor());
   if (location.hash) applyHash({ history: 'none', animate: false });   // deep link
