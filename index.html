@@ -53,6 +53,15 @@
   #testament-lines { fill: none; stroke: var(--line-ts); stroke-width: 1.5; }
   #stars           { fill: none; stroke-linecap: round; }
   #stars path      { stroke: var(--c, var(--ink)); stroke-width: calc(var(--dot) * var(--s, 1)); }
+  /* Chapter numbers as centre marks: world-space text, sized per chapter
+     (--fs, world units) and damped as you zoom in (--nz) so they grow with
+     the map but never shout. */
+  #numbers text {
+    fill: var(--c, var(--ink)); font-family: var(--font);
+    text-anchor: middle; dominant-baseline: central;
+    font-size: calc(var(--fs) * var(--nz, 1) * 1px);
+  }
+  #numbers text.hover, #numbers text.selected { fill-opacity: 1; font-weight: 500; }
 
   #hover-division-fill { fill: var(--ink); opacity: 0; transition: opacity 240ms; }
   #hover-division-fill.on { opacity: .018; }
@@ -86,7 +95,7 @@
   #hover-star  { fill: var(--c, var(--ink)); }
   #hover-halo  { fill: none; stroke: var(--c, var(--ink)); stroke-opacity: .35; }
   #sel-ring    { fill: none; stroke: var(--c, var(--ink)); stroke-width: 1; }
-  body.no-stars :is(#stars, #hover-star, #hover-halo, #sel-ring) { display: none; }
+  body.no-marks :is(#stars, #numbers, #hover-star, #hover-halo, #sel-ring, #chapter-nums) { display: none; }
 
   /* chrome: almost none */
   .chrome { position: fixed; font-size: var(--chrome-px); letter-spacing: .22em; text-transform: uppercase; line-height: 1.9; }
@@ -156,6 +165,7 @@
     <rect id="sel-book" visibility="hidden"/>
     <rect id="sel-chapter" visibility="hidden"/>
     <g id="stars"></g>
+    <g id="numbers"></g>
     <path id="focus-veil"/>
   </g>
   <g id="overlay">
@@ -182,9 +192,10 @@
    ===================================================================== */
 
 const CONFIG = {
-  showStars: true,     // the white point at the centre of every chapter cell
-  starOpacity: 0.5,      // 0–1: brightness of the central stars
-  relativeStarSize: true, // star area ∝ the chapter's verse count (a typical chapter keeps today's size)
+  centreMark: 'number',   // what marks each chapter's centre: 'number' (its chapter number) or 'star' (a point)
+  showMarks: true,        // show the centre marks at all
+  markOpacity: 0.5,       // 0–1: brightness of the centre marks
+  relativeMarkSize: true, // larger chapters (more verses) get a larger mark
   bookLabels: 'short', // book names on the map: 'full' (Genesis) or 'short' (GEN)
   colours: true,       // colour book borders, stars and names from colours.json
 };
@@ -651,14 +662,32 @@ const svgEl = (tag, attrs = {}, parent) => {
   return el;
 };
 
-// Relative star size: star AREA is proportional to verse count, so a
-// 176-verse Psalm 119 is ~2.7× the diameter of a typical (median) chapter
-// and a 2-verse Psalm 117 shrinks to the floor. 1 when switched off.
+// Relative mark size: a mark's AREA is proportional to verse count, so a
+// 176-verse Psalm 119 is ~2.7× the size of a typical (median) chapter's and
+// a 2-verse Psalm 117 shrinks to a floor. 1 when switched off.
 let medianVerses = 1;
-function starScale(c) {
-  if (!CONFIG.relativeStarSize || !c.verses) return 1;
-  return Math.max(.4, Math.sqrt(c.verses / medianVerses));
+function markScale(c, floor) {
+  if (!CONFIG.relativeMarkSize || !c.verses) return 1;
+  return Math.max(floor, Math.sqrt(c.verses / medianVerses));
 }
+const starScale = (c) => markScale(c, .4);
+
+// A chapter number's size in world units: about a third of its cell for a
+// typical chapter, scaled by verses, but never wider or taller than fits.
+const NUMBER_SHARE = .32;          // of the cell's side, for a median chapter
+const DIGIT_EM = .6;               // IBM Plex Mono's advance, in ems
+function numberSize(c) {
+  const side = Math.sqrt(c.width * c.height);
+  return Math.min(side * NUMBER_SHARE * markScale(c, .55),
+                  c.width * .8 / (String(c.chapter).length * DIGIT_EM),
+                  c.height * .7);
+}
+const useNumbers = () => CONFIG.centreMark === 'number';
+
+// Numbers are only drawn where they can be read: below this on-screen size
+// (for a typical chapter) the star stands in; numbers fade in above it.
+// They stop growing once a typical number reaches NUMBER_MAX_PX.
+const NUMBER_MIN_PX = 5, NUMBER_MAX_PX = 24;
 
 const bookLines = [];
 // A region made of several rectangles, as one path (they never overlap).
@@ -674,23 +703,38 @@ function drawWorld(model) {
   $('division-lines').setAttribute('d', model.divisions
     .flatMap((d) => d.outline.filter((sg) => sg.betweenDivisions))
     .map((sg) => `M${sg.x1} ${sg.y1}L${sg.x2} ${sg.y2}`).join(''));
-  // One border path and one star group per book, so each can take its colour.
+  // One border path, one star group and one number group per book, so
+  // each can take its colour.
   $('book-lines').replaceChildren();
   $('stars').replaceChildren();
+  $('numbers').replaceChildren();
   bookLines.length = 0;
+  numberEls.length = 0;
   for (const b of model.books) {
     const line = svgEl('path', { d: rectPath(b) }, $('book-lines'));
     bookLines[b.index] = line;
     tint(line, b);
     line.classList.toggle('tinted', !!colourOf(b));
     // Zero-length round-capped segments: every star is a screen-sized dot.
-    const group = svgEl('g', {}, $('stars'));
-    tint(group, b);
+    const stars = svgEl('g', {}, $('stars'));
+    tint(stars, b);
     for (const c of b.chapters) {
-      svgEl('path', { d: `M${c.centerX} ${c.centerY}h.001`, style: `--s:${starScale(c)}` }, group);
+      svgEl('path', { d: `M${c.centerX} ${c.centerY}h.001`, style: `--s:${starScale(c)}` }, stars);
+    }
+    if (!useNumbers()) continue;
+    const numbers = svgEl('g', {}, $('numbers'));
+    tint(numbers, b);
+    for (const c of b.chapters) {
+      const el = svgEl('text', { x: c.centerX, y: c.centerY, style: `--fs:${numberSize(c)}` }, numbers);
+      el.textContent = c.chapter;
+      numberEls[c.index] = el;
     }
   }
+  medianNumberSize = .32 * model.chapterSide;
+  markNz = null;
 }
+const numberEls = [];
+let medianNumberSize = 1, markNz = null;
 
 // Label measurement (for "only where space permits").
 const measureCtx = document.createElement('canvas').getContext('2d');
@@ -724,8 +768,9 @@ function createLabels(model) {
     const full = `${b.index + 1}.${CONFIG.bookLabels === 'short' ? b.key : b.name}`.toUpperCase();
     labels.books.push({ b, g, bg, el, text: { full, num: String(b.index + 1) }, width: {}, mode: null });
   });
-  // Chapter numbers, revealed wherever cells are big enough on screen.
-  model.chapters.forEach((c) => {
+  // With star marks, chapter numbers sit in each cell's corner, revealed
+  // wherever cells are big enough on screen. (Number marks make them redundant.)
+  if (!useNumbers()) model.chapters.forEach((c) => {
     const el = svgEl('text', { class: 'chapter-num', visibility: 'hidden' }, $('chapter-nums'));
     el.textContent = c.chapter;
     labels.chapters.push({ c, el, on: false });
@@ -752,6 +797,18 @@ function renderCamera() {
   const overviewK = frame(MODEL.world).k;
   const dot = Math.min(7, 3 * (k / overviewK) ** .28);
   $('stars').style.setProperty('--dot', `${dot}px`);
+
+  // Number marks: crossfade from stars once a typical number is legible,
+  // and damp their growth beyond NUMBER_MAX_PX.
+  let numbersShown = 0, nz = 1;
+  if (useNumbers()) {
+    const typicalPx = medianNumberSize * k;
+    numbersShown = Math.min(1, Math.max(0, (typicalPx - NUMBER_MIN_PX) / 2));
+    nz = Math.min(1, NUMBER_MAX_PX / typicalPx);
+    if (nz !== markNz) { $('numbers').style.setProperty('--nz', nz); markNz = nz; }
+  }
+  $('numbers').style.opacity = numbersShown;
+  $('stars').style.opacity = 1 - numbersShown;
 
   // Chapter lines fade in once cells are big enough not to become a haze.
   const cellPx = MODEL.chapterSide * k;
@@ -792,13 +849,21 @@ function renderCamera() {
     if (on !== l.on) { l.el.setAttribute('visibility', on ? 'visible' : 'hidden'); l.on = on; }
   }
 
-  placeStar($('hover-star'), state.hover);
-  placeStar($('hover-halo'), state.hover);
+  // Emphasis: over stars, a brighter star and halo; over numbers, the number
+  // itself brightens (see syncMarkClasses) and the ring circles it.
+  const overNumbers = numbersShown >= .5;
+  placeStar($('hover-star'), overNumbers ? null : state.hover);
+  placeStar($('hover-halo'), overNumbers ? null : state.hover);
   placeStar($('sel-ring'), state.selected);
-  const radius = (c) => (c ? dot * starScale(c) / 2 : 0);
-  $('hover-star').setAttribute('r', radius(state.hover) + 1.2);
-  $('hover-halo').setAttribute('r', radius(state.hover) + 7);
-  $('sel-ring').setAttribute('r', radius(state.selected) + 6);
+  const starRadius = (c) => (c ? dot * starScale(c) / 2 : 0);
+  const numberRadius = (c) => {
+    if (!c) return 0;
+    const px = numberSize(c) * k * nz;
+    return Math.max(px * .55, String(c.chapter).length * DIGIT_EM * px / 2);
+  };
+  $('hover-star').setAttribute('r', starRadius(state.hover) + 1.2);
+  $('hover-halo').setAttribute('r', starRadius(state.hover) + 7);
+  $('sel-ring').setAttribute('r', (overNumbers ? numberRadius(state.selected) + 5 : starRadius(state.selected) + 6));
 }
 
 function placeStar(el, c) {
@@ -883,11 +948,24 @@ function renderState() {
 
 let numSelected = null;
 function syncSelectionClasses() {
+  syncMarkClasses();
   const s = state.selected;
   if (s === numSelected) return;
   if (numSelected) labels.chapters[numSelected.index]?.el.classList.remove('selected');
   if (s) labels.chapters[s.index]?.el.classList.add('selected');
   numSelected = s;
+}
+
+// The hovered and selected chapters' numbers brighten.
+const marked = { hover: null, selected: null };
+function syncMarkClasses() {
+  for (const kind of ['hover', 'selected']) {
+    const now = state[kind];
+    if (now === marked[kind]) continue;
+    if (marked[kind]) numberEls[marked[kind].index]?.classList.remove(kind);
+    if (now) numberEls[now.index]?.classList.add(kind);
+    marked[kind] = now;
+  }
 }
 
 // Switch between the portrait and landscape worlds. Objects are carried
@@ -903,6 +981,7 @@ function useLayout(name) {
     state.focus = { level: f.level, division: same('divisions', f.division),
                     book: same('books', f.book), chapter: same('chapters', f.chapter) };
   }
+  marked.hover = marked.selected = null;
   drawWorld(MODEL);
   createLabels(MODEL);
   cancelAnimationFrame(flight);
@@ -1251,8 +1330,9 @@ async function start() {
     const missing = MODELS.landscape.books.filter((b) => !COLOURS[b.key]).map((b) => b.key);
     if (missing.length) console.warn('No colour for:', missing.join(', '));
   }
-  document.body.classList.toggle('no-stars', !CONFIG.showStars);
-  $('stars').style.strokeOpacity = CONFIG.starOpacity;
+  document.body.classList.toggle('no-marks', !CONFIG.showMarks);
+  $('stars').style.strokeOpacity = CONFIG.markOpacity;
+  $('numbers').style.fillOpacity = CONFIG.markOpacity;
   $('hint').textContent = COARSE
     ? 'tap to explore · pinch to zoom · hold to scan'
     : 'click to select · again to enter · scroll to zoom · esc to return';
