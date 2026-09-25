@@ -36,7 +36,7 @@
   #book-lines path.tinted { stroke-opacity: .7; }
   #testament-lines { fill: none; stroke: var(--line-ts); stroke-width: 1.5; }
   #stars           { fill: none; stroke-linecap: round; }
-  #stars path      { stroke: var(--c, var(--ink)); }
+  #stars path      { stroke: var(--c, var(--ink)); stroke-width: calc(var(--dot) * var(--s, 1)); }
 
   #hover-book-fill  { fill: var(--ink); opacity: 0; transition: opacity 180ms; }
   #hover-book-line  { fill: none; stroke: var(--c, var(--ink)); stroke-width: 1; opacity: 0; transition: opacity 180ms; }
@@ -135,6 +135,7 @@
 const CONFIG = {
   showStars: true,     // the white point at the centre of every chapter cell
   starOpacity: 0.5,      // 0–1: brightness of the central stars
+  relativeStarSize: true, // star area ∝ the chapter's verse count (a typical chapter keeps today's size)
   bookLabels: 'short', // book names on the map: 'full' (Genesis) or 'short' (GEN)
   colours: true,       // colour book borders, stars and names from colours.json
 };
@@ -154,7 +155,7 @@ async function loadBible(url) {
   return json.testaments.map((t) => ({
     id: `${t.name[0]}T`,
     name: `${t.name} Testament`,
-    books: t.divisions.flatMap((d) => d.books.map(({ key, name, chapters }) => ({ key, name, chapters }))),
+    books: t.divisions.flatMap((d) => d.books.map(({ key, name, chapters, verses }) => ({ key, name, chapters, verses }))),
   }));
 }
 
@@ -290,12 +291,12 @@ function layoutBible(bible, world) {
   let ty = world.y;
 
   bible.forEach((t) => {
-    const items = t.books.map(({ key, name, chapters }) => ({ key, name, n: chapters }));
+    const items = t.books.map(({ key, name, chapters, verses }) => ({ key, name, n: chapters, verses }));
     const tRect = { x: world.x, y: ty, width: world.width, height: usableH * chapterSum(items) / total };
     const testament = { id: t.id, name: t.name, ...tRect, books: [] };
     testaments.push(testament);
 
-    for (const { key, name, n, rect } of partitionBooks(items, tRect).regions) {
+    for (const { key, name, n, verses, rect } of partitionBooks(items, tRect).regions) {
       const book = {
         index: books.length, testament: t.name, testamentId: t.id, key, name, chapterCount: n,
         ...rect, chapters: [],
@@ -304,6 +305,7 @@ function layoutBible(bible, world) {
         const chapter = {
           index: chapters.length, testament: t.name, testamentId: t.id,
           book: name, bookKey: key, bookIndex: book.index, chapter: i + 1,
+          verses: verses?.[i] ?? null,
           ...cell, centerX: cell.x + cell.width / 2, centerY: cell.y + cell.height / 2,
         };
         book.chapters.push(chapter);
@@ -333,6 +335,8 @@ function checkModel(model) {
   console.assert(model.chapters.length === 1189, 'expected 1,189 chapters');
   console.assert(model.testaments[0].books.reduce((s, b) => s + b.chapterCount, 0) === 929, 'OT should have 929 chapters');
   console.assert(model.testaments[1].books.reduce((s, b) => s + b.chapterCount, 0) === 260, 'NT should have 260 chapters');
+  const noVerses = model.chapters.filter((c) => !c.verses).map((c) => `${c.bookKey} ${c.chapter}`);
+  if (noVerses.length) console.warn('No verse count for:', noVerses.join(', '));
 }
 
 // Pointer → chapter lookup, in world coordinates.
@@ -412,7 +416,18 @@ const svgEl = (tag, attrs = {}, parent) => {
   return el;
 };
 
+// Relative star size: star AREA is proportional to verse count, so a
+// 176-verse Psalm 119 is ~2.7× the diameter of a typical (median) chapter
+// and a 2-verse Psalm 117 shrinks to the floor. 1 when switched off.
+let medianVerses = 1;
+function starScale(c) {
+  if (!CONFIG.relativeStarSize || !c.verses) return 1;
+  return Math.max(.4, Math.sqrt(c.verses / medianVerses));
+}
+
 function drawWorld(model) {
+  const counts = model.chapters.map((c) => c.verses).filter(Boolean).sort((a, b) => a - b);
+  if (counts.length) medianVerses = counts[counts.length >> 1];
   $('chapter-lines').setAttribute('d', model.chapters.map(rectPath).join(''));
   $('testament-lines').setAttribute('d', model.testaments.map(rectPath).join(''));
   // One border path and one star path per book, so each can take its colour.
@@ -421,7 +436,11 @@ function drawWorld(model) {
     tint(line, b);
     line.classList.toggle('tinted', !!colourOf(b));
     // Zero-length round-capped segments: every star is a screen-sized dot.
-    tint(svgEl('path', { d: b.chapters.map((c) => `M${c.centerX} ${c.centerY}h.001`).join('') }, $('stars')), b);
+    const group = svgEl('g', {}, $('stars'));
+    tint(group, b);
+    for (const c of b.chapters) {
+      svgEl('path', { d: `M${c.centerX} ${c.centerY}h.001`, style: `--s:${starScale(c)}` }, group);
+    }
   }
 }
 
@@ -480,7 +499,8 @@ function renderCamera() {
 
   // Stars grow a little as you approach, but stay stars.
   const overviewK = frame(WORLD, OVERVIEW_FRAME).k;
-  $('stars').style.strokeWidth = Math.min(7, 3 * (k / overviewK) ** .28);
+  const dot = Math.min(7, 3 * (k / overviewK) ** .28);
+  $('stars').style.setProperty('--dot', `${dot}px`);
 
   for (const { t, el } of labels.testaments) {
     const x = toScreenX(t.x) - 22, y = toScreenY(t.y + t.height / 2);
@@ -505,10 +525,10 @@ function renderCamera() {
   placeStar($('hover-star'), state.hover);
   placeStar($('hover-halo'), state.hover);
   placeStar($('sel-ring'), state.selected);
-  const dot = parseFloat($('stars').style.strokeWidth) / 2;
-  $('hover-star').setAttribute('r', dot + 1.2);
-  $('hover-halo').setAttribute('r', dot + 7);
-  $('sel-ring').setAttribute('r', dot + 6);
+  const radius = (c) => (c ? dot * starScale(c) / 2 : 0);
+  $('hover-star').setAttribute('r', radius(state.hover) + 1.2);
+  $('hover-halo').setAttribute('r', radius(state.hover) + 7);
+  $('sel-ring').setAttribute('r', radius(state.selected) + 6);
 }
 
 function placeStar(el, c) {
