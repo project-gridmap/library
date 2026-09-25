@@ -67,6 +67,7 @@
   #hover-star  { fill: var(--ink); }
   #hover-halo  { fill: none; stroke: var(--ink); stroke-opacity: .28; }
   #sel-ring    { fill: none; stroke: var(--ink); stroke-width: 1; }
+  body.no-stars :is(#stars, #hover-star, #hover-halo, #sel-ring) { display: none; }
 
   /* chrome: almost none */
   .chrome { position: fixed; font-size: 10px; letter-spacing: .22em; text-transform: uppercase; line-height: 1.9; }
@@ -126,30 +127,32 @@
 'use strict';
 
 /* =====================================================================
-   1. BIBLE DATA
-   The 66-book Protestant canon, in canonical order: [name, chapters].
+   0. CONFIG
    ===================================================================== */
 
-const BIBLE = [
-  { id: 'OT', name: 'Old Testament', books: [
-    ['Genesis', 50], ['Exodus', 40], ['Leviticus', 27], ['Numbers', 36], ['Deuteronomy', 34],
-    ['Joshua', 24], ['Judges', 21], ['Ruth', 4], ['1 Samuel', 31], ['2 Samuel', 24],
-    ['1 Kings', 22], ['2 Kings', 25], ['1 Chronicles', 29], ['2 Chronicles', 36],
-    ['Ezra', 10], ['Nehemiah', 13], ['Esther', 10], ['Job', 42], ['Psalms', 150],
-    ['Proverbs', 31], ['Ecclesiastes', 12], ['Song of Solomon', 8], ['Isaiah', 66],
-    ['Jeremiah', 52], ['Lamentations', 5], ['Ezekiel', 48], ['Daniel', 12], ['Hosea', 14],
-    ['Joel', 3], ['Amos', 9], ['Obadiah', 1], ['Jonah', 4], ['Micah', 7], ['Nahum', 3],
-    ['Habakkuk', 3], ['Zephaniah', 3], ['Haggai', 2], ['Zechariah', 14], ['Malachi', 4],
-  ]},
-  { id: 'NT', name: 'New Testament', books: [
-    ['Matthew', 28], ['Mark', 16], ['Luke', 24], ['John', 21], ['Acts', 28], ['Romans', 16],
-    ['1 Corinthians', 16], ['2 Corinthians', 13], ['Galatians', 6], ['Ephesians', 6],
-    ['Philippians', 4], ['Colossians', 4], ['1 Thessalonians', 5], ['2 Thessalonians', 3],
-    ['1 Timothy', 6], ['2 Timothy', 4], ['Titus', 3], ['Philemon', 1], ['Hebrews', 13],
-    ['James', 5], ['1 Peter', 5], ['2 Peter', 3], ['1 John', 5], ['2 John', 1], ['3 John', 1],
-    ['Jude', 1], ['Revelation', 22],
-  ]},
-];
+const CONFIG = {
+  showStars: true,     // the white point at the centre of every chapter cell
+  bookLabels: 'short', // book names on the map: 'full' (Genesis) or 'short' (GEN)
+};
+
+/* =====================================================================
+   1. BIBLE DATA
+   The 66-book Protestant canon, from bible.json.
+   ===================================================================== */
+
+// Loaded from bible.json and reduced to what the map needs:
+// [{ id, name, books: [{ key, name, chapters }] }], in canonical order.
+// (The JSON's divisions are flattened; they are not yet part of the map.)
+async function loadBible(url) {
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`${url}: ${res.status}`);
+  const json = await res.json();
+  return json.testaments.map((t) => ({
+    id: `${t.name[0]}T`,
+    name: `${t.name} Testament`,
+    books: t.divisions.flatMap((d) => d.books.map(({ key, name, chapters }) => ({ key, name, chapters }))),
+  }));
+}
 
 
 /* =====================================================================
@@ -252,26 +255,26 @@ function layoutChapters(n, x, y, w, h) {
 }
 
 function layoutBible(bible, world) {
-  const total = bible.reduce((s, t) => s + t.books.reduce((a, b) => a + b[1], 0), 0);
+  const total = bible.reduce((s, t) => s + t.books.reduce((a, b) => a + b.chapters, 0), 0);
   const usableH = world.height - world.gutter * (bible.length - 1);
   const testaments = [], books = [], chapters = [];
   let ty = world.y;
 
   bible.forEach((t) => {
-    const items = t.books.map(([name, n]) => ({ name, n }));
+    const items = t.books.map(({ key, name, chapters }) => ({ key, name, n: chapters }));
     const tRect = { x: world.x, y: ty, width: world.width, height: usableH * chapterSum(items) / total };
     const testament = { id: t.id, name: t.name, ...tRect, books: [] };
     testaments.push(testament);
 
-    for (const { name, n, rect } of partitionBooks(items, tRect).regions) {
+    for (const { key, name, n, rect } of partitionBooks(items, tRect).regions) {
       const book = {
-        index: books.length, testament: t.name, testamentId: t.id, name, chapterCount: n,
+        index: books.length, testament: t.name, testamentId: t.id, key, name, chapterCount: n,
         ...rect, chapters: [],
       };
       layoutChapters(n, rect.x, rect.y, rect.width, rect.height).forEach((cell, i) => {
         const chapter = {
           index: chapters.length, testament: t.name, testamentId: t.id,
-          book: name, bookIndex: book.index, chapter: i + 1,
+          book: name, bookKey: key, bookIndex: book.index, chapter: i + 1,
           ...cell, centerX: cell.x + cell.width / 2, centerY: cell.y + cell.height / 2,
         };
         book.chapters.push(chapter);
@@ -293,16 +296,19 @@ function layoutBible(bible, world) {
    { testament, book, chapter, x, y, width, height, centerX, centerY, ... }
    ===================================================================== */
 
-const MODEL = layoutBible(BIBLE, WORLD);
+let MODEL;   // built at start-up, once bible.json has loaded
 
-console.assert(MODEL.testaments.length === 2, 'expected 2 testaments');
-console.assert(MODEL.books.length === 66, 'expected 66 books');
-console.assert(MODEL.chapters.length === 1189, 'expected 1,189 chapters');
-console.assert(MODEL.testaments[0].books.reduce((s, b) => s + b.chapterCount, 0) === 929, 'OT should have 929 chapters');
-console.assert(MODEL.testaments[1].books.reduce((s, b) => s + b.chapterCount, 0) === 260, 'NT should have 260 chapters');
+function checkModel(model) {
+  console.assert(model.testaments.length === 2, 'expected 2 testaments');
+  console.assert(model.books.length === 66, 'expected 66 books');
+  console.assert(model.chapters.length === 1189, 'expected 1,189 chapters');
+  console.assert(model.testaments[0].books.reduce((s, b) => s + b.chapterCount, 0) === 929, 'OT should have 929 chapters');
+  console.assert(model.testaments[1].books.reduce((s, b) => s + b.chapterCount, 0) === 260, 'NT should have 260 chapters');
+}
 
 // Pointer → chapter lookup, in world coordinates.
 function chapterAt(x, y) {
+  if (!MODEL) return null;
   for (const b of MODEL.books) {
     if (x < b.x || x >= b.x + b.width || y < b.y || y >= b.y + b.height) continue;
     for (const c of b.chapters) {
@@ -401,7 +407,7 @@ function createLabels(model) {
     const g = svgEl('g', {}, $('book-labels'));
     const bg = svgEl('rect', { class: 'label-bg', y: -6, height: 12 }, g);
     const el = svgEl('text', { class: 'book-label', x: 4 }, g);
-    el.textContent = b.name.toUpperCase();
+    el.textContent = (CONFIG.bookLabels === 'short' ? b.key : b.name).toUpperCase();
     labels.books.push({ b, g, bg, el, width: 0 });
   });
   measureLabels();
@@ -637,11 +643,26 @@ addEventListener('resize', () => {
    START
    ===================================================================== */
 
-drawWorld(MODEL);
-createLabels(MODEL);
-Object.assign(camera, cameraForFocus());
-renderState();
-document.fonts?.ready.then(() => { measureLabels(); renderCamera(); });
+async function start() {
+  try {
+    MODEL = layoutBible(await loadBible('bible.json'), WORLD);
+  } catch (err) {
+    console.error(err);
+    $('info').innerHTML = location.protocol === 'file:'
+      ? '<div>bible.json cannot be read from file://</div><div>serve this folder, e.g.</div><div>python3 -m http.server</div>'
+      : `<div>Could not load bible.json</div><div>${err.message}</div>`;
+    return;
+  }
+  checkModel(MODEL);
+  document.body.classList.toggle('no-stars', !CONFIG.showStars);
+  drawWorld(MODEL);
+  createLabels(MODEL);
+  Object.assign(camera, cameraForFocus());
+  renderState();
+  document.fonts?.ready.then(() => { measureLabels(); renderCamera(); });
+}
+
+start();
 </script>
 </body>
 </html>
