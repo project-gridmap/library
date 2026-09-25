@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Project Gridmap</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -18,16 +18,26 @@
     --line-dv:  #aeaaa2;   /* division boundaries: stronger */
     --line-ts:  #d9d5cd;   /* testament boundaries: strongest */
     --font: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
+    --label-px: 9px;       /* book labels; larger on touch screens */
+    --chrome-px: 10px;
+  }
+  @media (pointer: coarse) {
+    :root { --label-px: 11px; --chrome-px: 11px; }
   }
   html, body {
     margin: 0; height: 100%; overflow: hidden;
     background: var(--bg); color: var(--ink);
     font-family: var(--font);
     -webkit-font-smoothing: antialiased;
-    user-select: none; -webkit-user-select: none;
+    user-select: none; -webkit-user-select: none; -webkit-touch-callout: none;
+    touch-action: manipulation;
   }
-  svg#map { display: block; position: fixed; inset: 0; width: 100%; height: 100%; }
+  /* The map takes every gesture itself: pinch, pan, press. */
+  svg#map { display: block; position: fixed; inset: 0; width: 100%; height: 100%; touch-action: none; }
   svg#map.over-chapter { cursor: pointer; }
+  svg#map.panning { cursor: grabbing; }
+  #safe { position: fixed; visibility: hidden; pointer-events: none;
+    padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left); }
 
   /* world-space geometry: strokes stay hairline at every zoom */
   #world path, #world rect { vector-effect: non-scaling-stroke; }
@@ -58,18 +68,17 @@
   /* screen-space overlay: labels and star emphasis */
   #overlay text { font-family: var(--font); pointer-events: none; }
   .book-label {
-    font-size: 9px; letter-spacing: .14em; fill: var(--c, var(--ink)); opacity: .72;
+    font-size: var(--label-px); letter-spacing: .14em; fill: var(--c, var(--ink)); opacity: .72;
     dominant-baseline: central; transition: opacity 180ms;
   }
   .label-bg { fill: var(--bg); }
   .book-label.hover, .book-label.selected { opacity: 1; }
   .testament-label {
-    font-size: 9.5px; letter-spacing: .32em; fill: var(--ink-2);
+    font-size: calc(var(--label-px) + .5px); letter-spacing: .32em; fill: var(--ink-2);
     text-anchor: middle; transition: fill 250ms;
   }
   .testament-label.selected { fill: var(--ink); }
-  .chapter-num { font-size: 10px; fill: var(--ink-3); opacity: 0; transition: opacity 400ms 150ms; }
-  .chapter-num.on { opacity: 1; }
+  .chapter-num { font-size: calc(var(--label-px) + 1px); fill: var(--ink-3); }
   .chapter-num.selected { fill: var(--ink); }
   #hover-star  { fill: var(--c, var(--ink)); }
   #hover-halo  { fill: none; stroke: var(--c, var(--ink)); stroke-opacity: .35; }
@@ -77,25 +86,51 @@
   body.no-stars :is(#stars, #hover-star, #hover-halo, #sel-ring) { display: none; }
 
   /* chrome: almost none */
-  .chrome { position: fixed; font-size: 10px; letter-spacing: .22em; text-transform: uppercase; line-height: 1.9; }
-  #crumbs { top: 18px; left: 24px; color: var(--ink-3); }
+  .chrome { position: fixed; font-size: var(--chrome-px); letter-spacing: .22em; text-transform: uppercase; line-height: 1.9; }
+  #crumbs { top: calc(18px + env(safe-area-inset-top)); left: calc(24px + env(safe-area-inset-left)); color: var(--ink-3); }
+  /* Chrome sits on a patch of background, like the book labels, so it stays
+     legible when the map is zoomed underneath it. */
+  #crumbs, #info { background: var(--bg); padding: 0 8px; margin-left: -8px; max-width: calc(100vw - 48px); }
+  #info:empty { display: none; }
   #crumbs span { cursor: pointer; transition: color 150ms; }
   #crumbs span:hover, #crumbs span.current { color: var(--ink-2); }
   #crumbs span.current, #crumbs span.static { cursor: default; }
   #crumbs span.static:hover { color: inherit; }
   #crumbs i { font-style: normal; padding: 0 .7em; }
-  #info { bottom: 18px; left: 24px; }
+  #info { bottom: calc(18px + env(safe-area-inset-bottom)); left: calc(24px + env(safe-area-inset-left)); }
   #info div:nth-child(1) { color: var(--ink-3); }
   #info div:nth-child(2), #info div:nth-child(3) { color: var(--ink-2); }
   #info div:nth-child(4) { color: var(--ink); }
   #info [data-go] { cursor: pointer; transition: color 150ms; }
   #info [data-go]:hover { color: var(--ink); }
-  #hint { bottom: 18px; right: 24px; color: var(--ink-2); text-align: right; transition: opacity 300ms; }
+  #hint { bottom: calc(18px + env(safe-area-inset-bottom)); right: calc(24px + env(safe-area-inset-right));
+    color: var(--ink-2); text-align: right; transition: opacity 300ms; pointer-events: none; }
   #hint.away { opacity: 0; }
+
+  /* Touch: bigger targets for the chrome that can be tapped. */
+  @media (pointer: coarse) {
+    .chrome { line-height: 2.3; }
+    #crumbs span { display: inline-block; padding: 2px 0; }
+  }
+  /* Short (phone landscape): the selection info folds onto one line. */
+  @media (max-height: 499px) {
+    .chrome { line-height: 1.9; }
+    #crumbs { top: calc(8px + env(safe-area-inset-top)); }
+    #info, #hint { bottom: calc(8px + env(safe-area-inset-bottom)); }
+    #info div { display: inline; }
+    #info div + div::before { content: ' · '; color: var(--ink-3); }
+  }
+  /* Narrow (phone portrait): tighter margins; the hint sits where the
+     selection info will later appear. */
+  @media (max-width: 699px) {
+    #crumbs { left: calc(16px + env(safe-area-inset-left)); top: calc(12px + env(safe-area-inset-top)); }
+    #info { left: calc(16px + env(safe-area-inset-left)); bottom: calc(12px + env(safe-area-inset-bottom)); }
+    #hint { left: calc(16px + env(safe-area-inset-left)); right: 16px; bottom: calc(12px + env(safe-area-inset-bottom)); text-align: left; }
+  }
 
   #tooltip {
     position: fixed; pointer-events: none; opacity: 0; transition: opacity 120ms;
-    font-size: 10px; letter-spacing: .16em; text-transform: uppercase; line-height: 1.6;
+    font-size: var(--chrome-px); letter-spacing: .16em; text-transform: uppercase; line-height: 1.6;
     padding: 5px 8px; background: var(--bg); border-left: 1px solid var(--line-bk);
   }
   #tooltip.on { opacity: 1; }
@@ -132,7 +167,8 @@
 
 <nav id="crumbs" class="chrome"></nav>
 <div id="info" class="chrome"></div>
-<div id="hint" class="chrome">click to select &middot; again to enter &middot; esc to return</div>
+<div id="hint" class="chrome"></div>
+<div id="safe"></div>
 <div id="tooltip"><div class="d"></div><div class="b"></div></div>
 
 <script>
@@ -224,7 +260,14 @@ function tint(el, book) {
      ordered list per testament and merely carry their division identity.
    ===================================================================== */
 
-const WORLD = { x: 0, y: 0, width: 1600, height: 1000, gutter: 30 };
+// Two canonical worlds, one per screen shape: portrait (phones, first) and
+// landscape (desktop). Each is fixed and deterministic, so a chapter has
+// one permanent position within each; its identity across both is its id
+// (e.g. GEN.12). The portrait shape suits a phone's usable screen.
+const WORLDS = {
+  portrait:  { x: 0, y: 0, width: 1000, height: 1900, gutter: 30 },
+  landscape: { x: 0, y: 0, width: 1600, height: 1000, gutter: 30 },
+};
 
 // Split n chapters into r rows whose counts differ by at most one.
 function rowCounts(n, r) {
@@ -498,34 +541,79 @@ function chapterAt(x, y) {
 /* =====================================================================
    4. VIEWPORT / CAMERA
    The camera is the only thing that moves. screen = world·k + offset,
-   with the world point (cx, cy) at the centre of the screen.
+   with the world point (cx, cy) at the centre of the screen. It flies
+   between focus targets, or moves freely under pinch, drag and wheel.
    ===================================================================== */
 
-const camera = { cx: WORLD.width / 2, cy: WORLD.height / 2, k: 1 };
+const camera = { cx: 0, cy: 0, k: 1, free: false };   // free: moved by hand since the last flight
 const viewport = { w: innerWidth, h: innerHeight };
+const COARSE = matchMedia('(pointer: coarse)').matches;
+const REDUCED_MOTION = matchMedia('(prefers-reduced-motion: reduce)').matches;
 
 const toScreenX = (x) => (x - camera.cx) * camera.k + viewport.w / 2;
 const toScreenY = (y) => (y - camera.cy) * camera.k + viewport.h / 2;
 const toWorldX  = (sx) => (sx - viewport.w / 2) / camera.k + camera.cx;
 const toWorldY  = (sy) => (sy - viewport.h / 2) / camera.k + camera.cy;
 
-const OVERVIEW_FRAME = { pad: 64, padBottom: 104 };
+// Portrait screens get the portrait world, wide screens the landscape one.
+const layoutFor = () => (viewport.h > viewport.w ? 'portrait' : 'landscape');
+const isNarrow = () => viewport.w < 700;
 
-// Camera that frames a world rectangle; `fill` caps how much of the
-// screen it may occupy so tiny books keep some surrounding world.
-// `padBottom` leaves room for the selection info in the corner.
-function frame(rect, { pad = 64, padBottom = pad, fill = 1 } = {}) {
-  const availW = Math.max(1, viewport.w - pad * 2), availH = Math.max(1, viewport.h - pad - padBottom);
+// Screen space kept clear for the chrome and the device's safe areas.
+// Narrow (phone portrait): room below for the stacked selection info.
+// Short (phone landscape): the info is one line, so keep margins slim.
+function insets() {
+  const safe = getComputedStyle(document.getElementById('safe'));
+  const px = (v) => parseFloat(v) || 0;
+  const base = isNarrow() ? { top: 48, right: 14, bottom: 110, left: 34 }   // left: testament labels
+    : viewport.h < 500 ? { top: 38, right: 20, bottom: 36, left: 40 }
+    : { top: 64, right: 64, bottom: 104, left: 64 };
+  return {
+    top: base.top + px(safe.paddingTop), right: base.right + px(safe.paddingRight),
+    bottom: base.bottom + px(safe.paddingBottom), left: base.left + px(safe.paddingLeft),
+  };
+}
+
+// Camera that centres a world rectangle in the clear part of the screen.
+// `extra` adds breathing room; `fill` caps how much of the screen it may
+// occupy so tiny books keep some surrounding world.
+function frame(rect, { extra = 0, fill = 1 } = {}) {
+  const i = insets(), e = extra * (isNarrow() ? .5 : 1);
+  const t = i.top + e, r = i.right + e, b = i.bottom + e, l = i.left + e;
+  const availW = Math.max(1, viewport.w - l - r), availH = Math.max(1, viewport.h - t - b);
   const k = Math.min(availW / rect.width, availH / rect.height,
                      (viewport.w * fill) / rect.width, (viewport.h * fill) / rect.height);
-  return { cx: rect.x + rect.width / 2, cy: rect.y + rect.height / 2 + (padBottom - pad) / 2 / k, k };
+  return { cx: rect.x + rect.width / 2 + (r - l) / 2 / k, cy: rect.y + rect.height / 2 + (b - t) / 2 / k, k };
+}
+
+// Free movement stays within sensible bounds: from a little smaller than
+// the whole Bible to one chapter nearly filling the screen.
+function clampK(k) {
+  const min = frame(MODEL.world).k * .6;
+  const max = Math.min(viewport.w, viewport.h) * .9 / MODEL.chapterSide;
+  return Math.min(Math.max(k, min), max);
+}
+function setCamera(cx, cy, k) {
+  const w = MODEL.world;
+  camera.k = clampK(k);
+  camera.cx = Math.min(Math.max(cx, w.x), w.x + w.width);
+  camera.cy = Math.min(Math.max(cy, w.y), w.y + w.height);
+  camera.free = true;
+  renderCamera();
+}
+// Zoom to scale k while keeping the world point under (sx, sy) fixed there.
+function zoomAround(sx, sy, wx, wy, k) {
+  k = clampK(k);
+  setCamera(wx - (sx - viewport.w / 2) / k, wy - (sy - viewport.h / 2) / k, k);
 }
 
 let flight = null;
-function flyTo(target, duration = 850) {
+function flyTo(target, duration = REDUCED_MOTION ? 0 : 850) {
+  cancelAnimationFrame(flight);
+  camera.free = false;
+  if (!duration) { Object.assign(camera, target); renderCamera(); refreshHover(); return; }
   const from = { ...camera }, t0 = performance.now();
   const ease = (t) => (t < .5 ? 4 * t * t * t : 1 - (-2 * t + 2) ** 3 / 2);
-  cancelAnimationFrame(flight);
   const step = (now) => {
     const t = Math.min(1, (now - t0) / duration), e = ease(t);
     camera.k  = from.k * (target.k / from.k) ** e;       // zoom geometrically
@@ -541,8 +629,9 @@ function flyTo(target, duration = 850) {
 
 /* =====================================================================
    5. RENDERING
-   Static world geometry is drawn once; the camera is a single transform.
-   Labels and stars live in screen space so they stay crisp and legible.
+   Static world geometry is drawn once per layout; the camera is a single
+   transform. Labels and stars live in screen space so they stay crisp,
+   and reveal themselves as the camera gets close enough to read them.
    ===================================================================== */
 
 const $ = (id) => document.getElementById(id);
@@ -582,7 +671,10 @@ function drawWorld(model) {
   $('division-lines').setAttribute('d', model.divisions
     .flatMap((d) => d.outline.filter((sg) => sg.betweenDivisions))
     .map((sg) => `M${sg.x1} ${sg.y1}L${sg.x2} ${sg.y2}`).join(''));
-  // One border path and one star path per book, so each can take its colour.
+  // One border path and one star group per book, so each can take its colour.
+  $('book-lines').replaceChildren();
+  $('stars').replaceChildren();
+  bookLines.length = 0;
   for (const b of model.books) {
     const line = svgEl('path', { d: rectPath(b) }, $('book-lines'));
     bookLines[b.index] = line;
@@ -599,6 +691,7 @@ function drawWorld(model) {
 
 // Label measurement (for "only where space permits").
 const measureCtx = document.createElement('canvas').getContext('2d');
+const labelPx = () => parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--label-px')) || 9;
 function measure(text, px, spacingEm) {
   measureCtx.font = `400 ${px}px ${getComputedStyle(document.body).fontFamily}`;
   return measureCtx.measureText(text).width + text.length * px * spacingEm;
@@ -607,54 +700,59 @@ function measure(text, px, spacingEm) {
 const labels = { testaments: [], books: [], chapters: [] };
 
 function createLabels(model) {
+  for (const id of ['testament-labels', 'book-labels', 'chapter-nums']) $(id).replaceChildren();
+  labels.testaments = []; labels.books = []; labels.chapters = [];
+  numSelected = null;
+  const px = labelPx();
+
   model.testaments.forEach((t) => {
-    labels.testaments.push({ t, el: svgEl('text', { class: 'testament-label' }, $('testament-labels')) });
-    labels.testaments.at(-1).el.textContent = t.name.toUpperCase();
+    const el = svgEl('text', { class: 'testament-label' }, $('testament-labels'));
+    el.textContent = t.name.toUpperCase();
+    labels.testaments.push({ t, el });
   });
   model.books.forEach((b) => {
     // A label sits on the book's top boundary, on a patch of background.
-    const g = svgEl('g', {}, $('book-labels'));
+    // Where the name won't fit, the canonical number alone may.
+    const g = svgEl('g', { visibility: 'hidden' }, $('book-labels'));
     tint(g, b);
-    const bg = svgEl('rect', { class: 'label-bg', y: -6, height: 12 }, g);
+    const bg = svgEl('rect', { class: 'label-bg', y: -px * .67, height: px * 1.33 }, g);
     const el = svgEl('text', { class: 'book-label', x: 4 }, g);
     // Canonical book number first: 1.GEN, 2.EXO … 66.REV
-    el.textContent = `${b.index + 1}.${CONFIG.bookLabels === 'short' ? b.key : b.name}`.toUpperCase();
-    labels.books.push({ b, g, bg, el, width: 0 });
+    const full = `${b.index + 1}.${CONFIG.bookLabels === 'short' ? b.key : b.name}`.toUpperCase();
+    labels.books.push({ b, g, bg, el, text: { full, num: String(b.index + 1) }, width: {}, mode: null });
+  });
+  // Chapter numbers, revealed wherever cells are big enough on screen.
+  model.chapters.forEach((c) => {
+    const el = svgEl('text', { class: 'chapter-num', visibility: 'hidden' }, $('chapter-nums'));
+    el.textContent = c.chapter;
+    labels.chapters.push({ c, el, on: false });
   });
   measureLabels();
 }
 function measureLabels() {
+  const px = labelPx();
   labels.books.forEach((l) => {
-    l.width = measure(l.el.textContent, 9, .14);
-    l.bg.setAttribute('width', l.width + 6);
+    l.width.full = measure(l.text.full, px, .14);
+    l.width.num = measure(l.text.num, px, .14);
+    l.mode = null;                       // re-decide on the next frame
   });
-}
-
-// Chapter numbers exist only for the focused book.
-function showChapterNumbers(book) {
-  const g = $('chapter-nums');
-  g.replaceChildren();
-  labels.chapters = [];
-  if (!book) return;
-  for (const c of book.chapters) {
-    const el = svgEl('text', { class: 'chapter-num' }, g);
-    el.textContent = c.chapter;
-    labels.chapters.push({ c, el });
-  }
-  requestAnimationFrame(() => labels.chapters.forEach((l) => l.el.classList.add('on')));
-  syncSelectionClasses();
 }
 
 // Everything that depends on the camera. Called every animation frame.
 function renderCamera() {
-  const k = camera.k;
+  if (!MODEL) return;
+  const k = camera.k, px = labelPx();
   $('world').setAttribute('transform',
     `translate(${viewport.w / 2 - camera.cx * k} ${viewport.h / 2 - camera.cy * k}) scale(${k})`);
 
   // Stars grow a little as you approach, but stay stars.
-  const overviewK = frame(WORLD, OVERVIEW_FRAME).k;
+  const overviewK = frame(MODEL.world).k;
   const dot = Math.min(7, 3 * (k / overviewK) ** .28);
   $('stars').style.setProperty('--dot', `${dot}px`);
+
+  // Chapter lines fade in once cells are big enough not to become a haze.
+  const cellPx = MODEL.chapterSide * k;
+  $('chapter-lines').style.opacity = Math.min(1, Math.max(0, (cellPx - 6) / 6));
 
   for (const { t, el } of labels.testaments) {
     const x = toScreenX(t.x) - 22, y = toScreenY(t.y + t.height / 2);
@@ -662,18 +760,33 @@ function renderCamera() {
   }
 
   for (const l of labels.books) {
-    const { b, g } = l;
-    const fits = l.width + 20 <= b.width * k && b.height * k >= 22;
-    g.setAttribute('visibility', fits ? 'visible' : 'hidden');
-    if (fits) g.setAttribute('transform', `translate(${toScreenX(b.x) + 5} ${toScreenY(b.y)})`);
+    const { b, g } = l, w = b.width * k;
+    const mode = b.height * k < px * 2.4 ? null
+      : l.width.full + 20 <= w ? 'full'
+      : l.width.num + 14 <= w ? 'num' : null;
+    if (mode !== l.mode) {
+      l.mode = mode;
+      g.setAttribute('visibility', mode ? 'visible' : 'hidden');
+      if (mode) { l.el.textContent = l.text[mode]; l.bg.setAttribute('width', l.width[mode] + 6); }
+    }
+    if (mode) g.setAttribute('transform', `translate(${toScreenX(b.x) + 5} ${toScreenY(b.y)})`);
   }
 
-  for (const { c, el } of labels.chapters) {
-    const fits = c.width * k >= 24 && c.height * k >= 24;
-    el.setAttribute('visibility', fits ? 'visible' : 'hidden');
-    const inset = Math.min(8, c.width * k * .12);
-    el.setAttribute('x', toScreenX(c.x) + inset);
-    el.setAttribute('y', toScreenY(c.y) + inset + 9);
+  // Only chapters that are on screen and large enough get their number.
+  const reveal = cellPx >= 20;
+  for (const l of labels.chapters) {
+    const c = l.c;
+    let on = false;
+    if (reveal && Math.min(c.width, c.height) * k >= 26) {
+      const x = toScreenX(c.x), y = toScreenY(c.y);
+      on = x < viewport.w && y < viewport.h && x + c.width * k > 0 && y + c.height * k > 0;
+      if (on) {
+        const inset = Math.min(8, c.width * k * .12);
+        l.el.setAttribute('x', x + inset);
+        l.el.setAttribute('y', y + inset + px);
+      }
+    }
+    if (on !== l.on) { l.el.setAttribute('visibility', on ? 'visible' : 'hidden'); l.on = on; }
   }
 
   placeStar($('hover-star'), state.hover);
@@ -727,7 +840,7 @@ function renderState() {
   $('focus-veil').classList.toggle('on', !!region);
   if (region) $('focus-veil').setAttribute('d', `M-1e5 -1e5H1e5V1e5H-1e5z${regionPath(region)}`);
 
-  $('hint').classList.toggle('away', state.focus.level !== 'bible');
+  $('hint').classList.toggle('away', hintDismissed || state.focus.level !== 'bible' || !!s);
 
   // Selection context. The division and book lines are also ways in.
   const info = $('info');
@@ -742,9 +855,14 @@ function renderState() {
       });
   }
 
-  const f = state.focus, crumbs = [['The Bible', () => focusBible()]];
-  if (f.division) crumbs.push([f.division.testament, null], [f.division.name, () => focusDivision(f.division)]);
-  if (f.book) crumbs.push([f.book.name, () => focusBook(f.book)]);
+  // Breadcrumbs; on a narrow screen the testament is dropped and books use
+  // their short key, so the trail fits one line.
+  const f = state.focus, narrow = isNarrow(), crumbs = [['The Bible', () => focusBible()]];
+  if (f.division) {
+    if (!narrow) crumbs.push([f.division.testament, null]);
+    crumbs.push([f.division.name, () => focusDivision(f.division)]);
+  }
+  if (f.book) crumbs.push([narrow ? f.book.key : f.book.name, () => focusBook(f.book)]);
   if (f.chapter) crumbs.push([String(f.chapter.chapter), () => {}]);
   const nav = $('crumbs');
   nav.replaceChildren();
@@ -760,19 +878,47 @@ function renderState() {
   renderCamera();
 }
 
+let numSelected = null;
 function syncSelectionClasses() {
-  labels.chapters.forEach(({ c, el }) => el.classList.toggle('selected', c === state.selected));
+  const s = state.selected;
+  if (s === numSelected) return;
+  if (numSelected) labels.chapters[numSelected.index]?.el.classList.remove('selected');
+  if (s) labels.chapters[s.index]?.el.classList.add('selected');
+  numSelected = s;
+}
+
+// Switch between the portrait and landscape worlds. Objects are carried
+// across by identity (their canonical index), never by coordinates.
+function useLayout(name) {
+  const from = MODEL;
+  MODEL = MODELS[name];
+  if (from && from !== MODEL) {
+    const same = (list, x) => (x ? MODEL[list][x.index] : null);
+    const f = state.focus;
+    state.selected = same('chapters', state.selected);
+    state.hover = null;
+    state.focus = { level: f.level, division: same('divisions', f.division),
+                    book: same('books', f.book), chapter: same('chapters', f.chapter) };
+  }
+  drawWorld(MODEL);
+  createLabels(MODEL);
+  cancelAnimationFrame(flight);
+  Object.assign(camera, cameraForFocus(), { free: false });
+  renderState();
 }
 
 
 /* =====================================================================
    6. INTERACTION
-   Hover reveals, click selects, a second click enters. Interaction only
-   ever moves the camera; the world never changes.
+   Mouse: hover reveals, click selects, a second click enters; drag pans
+   and the wheel zooms. Touch: pinch and drag move freely; a tap zooms in
+   one level until chapters are big enough to hit, then selects and
+   enters; press-and-hold scrubs across chapters. Back steps out. None of
+   it changes the world: only the camera moves.
    ===================================================================== */
 
 const state = {
-  hover: null,                                     // chapter under the pointer
+  hover: null,                                     // chapter under the pointer (or finger, while scrubbing)
   selected: null,                                  // selected chapter
   // level: 'bible' | 'division' | 'book' | 'chapter'
   focus: { level: 'bible', division: null, book: null, chapter: null },
@@ -789,26 +935,52 @@ function focusRegion() {
 
 function cameraForFocus() {
   const f = state.focus;
-  if (f.level === 'chapter') return frame(f.chapter, { pad: 96, fill: .42 });
-  if (f.level === 'book') return frame(f.book, { pad: 88, fill: .72 });
-  if (f.level === 'division') return frame(f.division.bounds, { pad: 80, fill: .9 });
-  return frame(WORLD, OVERVIEW_FRAME);
+  if (f.level === 'chapter') return frame(f.chapter, { extra: 32, fill: .42 });
+  if (f.level === 'book') return frame(f.book, { extra: 24, fill: .72 });
+  if (f.level === 'division') return frame(f.division.bounds, { extra: 16, fill: .9 });
+  return frame(MODEL.world);
 }
 
-function setFocus(level, { division = null, book = null, chapter = null } = {}) {
-  const bookChanged = state.focus.book !== book;
+// Focus changes go into browser history, so Back (and swipe-back) steps
+// out, and every view has an address: #GEN.12, #GEN, #the-law.
+// Going deeper pushes an entry; stepping out replaces the current one.
+function focusHash(f) {
+  if (f.level === 'chapter') return `#${f.book.key}.${f.chapter.chapter}`;
+  if (f.level === 'book') return `#${f.book.key}`;
+  if (f.level === 'division') return `#${f.division.id}`;
+  return '';
+}
+function recordHistory(mode) {
+  const hash = focusHash(state.focus);
+  if (mode === 'none' || hash === location.hash) return;
+  history[mode === 'replace' ? 'replaceState' : 'pushState'](null, '', `${location.pathname}${location.search}${hash}` || '.');
+}
+function applyHash(opts) {
+  const id = decodeURIComponent(location.hash.slice(1));
+  const [key, n] = id.split('.');
+  const book = MODEL.books.find((b) => b.key === key);
+  const chapter = book && n ? book.chapters[Number(n) - 1] : null;
+  const division = MODEL.divisions.find((d) => d.id === id);
+  if (chapter) { state.selected = chapter; focusChapter(chapter, opts); }
+  else if (book) focusBook(book, opts);
+  else if (division) focusDivision(division, opts);
+  else focusBible(opts);
+}
+
+function setFocus(level, { division = null, book = null, chapter = null } = {}, { history: mode = 'push', animate = true } = {}) {
   state.focus = { level, division, book, chapter };
-  if (bookChanged) showChapterNumbers(book);
   renderState();
-  flyTo(cameraForFocus());
+  recordHistory(mode);
+  if (animate) flyTo(cameraForFocus());
+  else { Object.assign(camera, cameraForFocus(), { free: false }); renderCamera(); }
 }
 const divisionOf    = (b) => MODEL.divisions[b.divisionIndex];
-const focusBible    = () => setFocus('bible');
-const focusDivision = (d) => setFocus('division', { division: d });
-const focusBook     = (b) => setFocus('book', { division: divisionOf(b), book: b });
-const focusChapter  = (c) => {
+const focusBible    = (o) => setFocus('bible', {}, o);
+const focusDivision = (d, o) => setFocus('division', { division: d }, o);
+const focusBook     = (b, o) => setFocus('book', { division: divisionOf(b), book: b }, o);
+const focusChapter  = (c, o) => {
   const b = MODEL.books[c.bookIndex];
-  setFocus('chapter', { division: divisionOf(b), book: b, chapter: c });
+  setFocus('chapter', { division: divisionOf(b), book: b, chapter: c }, o);
 };
 
 function select(c) { state.selected = c; renderState(); }
@@ -817,21 +989,29 @@ const tooltip = $('tooltip');
 
 // "Genesis 12"; a single psalm is conventionally "Psalm 23".
 const chapterRef = (c) => `${c.book === 'Psalms' ? 'Psalm' : c.book} ${c.chapter}`;
-function showTooltip(c, sx, sy) {
+
+// Beside the cursor for a mouse; above the finger when scrubbing, where
+// the finger can't cover it.
+function showTooltip(c, sx, sy, { aboveFinger = false } = {}) {
   tooltip.classList.toggle('on', !!c);
   if (!c) return;
   tooltip.querySelector('.d').textContent = c.division;
   tooltip.querySelector('.b').textContent = chapterRef(c);
   tint(tooltip, MODEL.books[c.bookIndex]);
   const w = tooltip.offsetWidth, h = tooltip.offsetHeight;
-  const x = sx + 18 + w > viewport.w ? sx - 18 - w : sx + 18;
-  const y = sy + 18 + h > viewport.h ? sy - 18 - h : sy + 18;
+  let x, y;
+  if (aboveFinger) {
+    x = Math.min(Math.max(8, sx - w / 2), viewport.w - w - 8);
+    y = sy - 72 - h;
+    if (y < 8) y = sy + 56;
+  } else {
+    x = sx + 18 + w > viewport.w ? sx - 18 - w : sx + 18;
+    y = sy + 18 + h > viewport.h ? sy - 18 - h : sy + 18;
+  }
   tooltip.style.transform = `translate(${x}px, ${y}px)`;
 }
 
 const svg = $('map');
-
-const pointer = { x: 0, y: 0, inside: false };
 
 // The chapter under a screen point. While focused, the veiled world
 // outside the focus counts as background.
@@ -847,48 +1027,190 @@ function hitTest(sx, sy) {
 // Step back out one level: chapter → book → division → Bible → no selection.
 // Leaving a book therefore lands in its division: the way divisions are met.
 function stepOut() {
-  const f = state.focus;
-  if (f.level === 'chapter') focusBook(f.book);
-  else if (f.level === 'book') focusDivision(f.division);
-  else if (f.level === 'division') focusBible();
+  const f = state.focus, opts = { history: 'replace' };
+  if (f.level === 'chapter') focusBook(f.book, opts);
+  else if (f.level === 'book') focusDivision(f.division, opts);
+  else if (f.level === 'division') focusBible(opts);
   else select(null);
 }
 
+// A finger needs a target about this big (CSS px) to hit reliably.
+const MIN_TAP = 30;
+let hintDismissed = false;
+
+function tapAt(sx, sy, pointerType) {
+  if (pointerType !== 'mouse' && !hintDismissed) hintDismissed = true;
+  const c = hitTest(sx, sy);
+  const f = state.focus;
+  if (!c) { stepOut(); return; }                     // background or veil
+
+  // Touch: while chapters are too small to hit, a tap zooms in one level
+  // toward what was tapped (division, then book) instead of selecting.
+  if (pointerType !== 'mouse' && Math.min(c.width, c.height) * camera.k < MIN_TAP) {
+    if (f.level === 'bible') { focusDivision(divisionOf(MODEL.books[c.bookIndex])); return; }
+    if (f.level === 'division') { focusBook(MODEL.books[c.bookIndex]); return; }
+  }
+  if (c !== state.selected) { select(c); return; }   // first tap selects
+
+  // Second tap on the selected chapter enters one level deeper.
+  if (!f.book) focusBook(MODEL.books[c.bookIndex]);  // from the Bible or a division
+  else if (f.chapter !== c) focusChapter(c);
+}
+
+// --- Mouse hover ---
+
+const pointer = { x: 0, y: 0, inside: false };       // the mouse, when over the map
+
 function refreshHover() {
+  if (gesture) return;
   const c = pointer.inside ? hitTest(pointer.x, pointer.y) : null;
   svg.classList.toggle('over-chapter', !!c);
   showTooltip(c, pointer.x, pointer.y);
   if (c !== state.hover) { state.hover = c; renderState(); }
 }
 
+function clearHover() {
+  showTooltip(null);
+  svg.classList.remove('over-chapter');
+  if (state.hover) { state.hover = null; renderState(); }
+}
+
+// --- Gestures: one pointer presses, pans or scrubs; two pinch ---
+
+const TAP_SLOP = COARSE ? 10 : 4;                    // px of movement still counted as a tap
+const HOLD_MS = 380;                                 // press this long to start scrubbing
+const touches = new Map();                           // active pointers: id → { x, y }
+let gesture = null;                                  // { kind: 'press' | 'pan' | 'pinch' | 'scrub', ... }
+
+function beginPan(x, y) {
+  cancelAnimationFrame(flight);
+  gesture = { kind: 'pan', x0: x, y0: y, cam: { ...camera } };
+  svg.classList.add('panning');
+  clearHover();
+}
+
+function beginPinch() {
+  clearTimeout(gesture?.hold);
+  if (gesture?.kind === 'scrub') endScrub(false);
+  cancelAnimationFrame(flight);
+  const [a, b] = [...touches.values()];
+  const mx = (a.x + b.x) / 2, my = (a.y + b.y) / 2;
+  gesture = { kind: 'pinch', d0: Math.hypot(a.x - b.x, a.y - b.y) || 1, wx: toWorldX(mx), wy: toWorldY(my), k0: camera.k };
+  clearHover();
+}
+
+function scrubAt(sx, sy) {
+  const c = hitTest(sx, sy);
+  showTooltip(c, sx, sy, { aboveFinger: true });
+  if (c !== state.hover) { state.hover = c; renderState(); }
+}
+// Lifting the finger selects whatever it was over.
+function endScrub(commit) {
+  const c = state.hover;
+  showTooltip(null);
+  state.hover = null;
+  if (commit && c) select(c); else renderState();
+}
+
+svg.addEventListener('pointerdown', (e) => {
+  if (e.pointerType === 'mouse' && e.button !== 0) return;
+  touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
+  try { svg.setPointerCapture(e.pointerId); } catch { /* pointer already gone: track it anyway */ }
+  if (touches.size === 1) {
+    gesture = { kind: 'press', x0: e.clientX, y0: e.clientY, type: e.pointerType };
+    if (e.pointerType !== 'mouse') {
+      gesture.hold = setTimeout(() => {
+        if (gesture?.kind !== 'press') return;
+        gesture.kind = 'scrub';
+        const p = touches.get(e.pointerId);
+        scrubAt(p.x, p.y);
+      }, HOLD_MS);
+    }
+  } else if (touches.size === 2) {
+    beginPinch();
+  }
+});
+
 svg.addEventListener('pointermove', (e) => {
-  Object.assign(pointer, { x: e.clientX, y: e.clientY, inside: true });
+  if (e.pointerType === 'mouse') Object.assign(pointer, { x: e.clientX, y: e.clientY, inside: true });
+  if (!touches.has(e.pointerId)) { if (e.pointerType === 'mouse') refreshHover(); return; }
+  touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
+  if (!gesture) return;
+
+  if (gesture.kind === 'pinch') {
+    const [a, b] = [...touches.values()];
+    zoomAround((a.x + b.x) / 2, (a.y + b.y) / 2, gesture.wx, gesture.wy,
+               gesture.k0 * Math.hypot(a.x - b.x, a.y - b.y) / gesture.d0);
+    return;
+  }
+  if (gesture.kind === 'scrub') { scrubAt(e.clientX, e.clientY); return; }
+  if (gesture.kind === 'press' && Math.hypot(e.clientX - gesture.x0, e.clientY - gesture.y0) > TAP_SLOP) {
+    clearTimeout(gesture.hold);
+    beginPan(gesture.x0, gesture.y0);
+  }
+  if (gesture.kind === 'pan') {
+    const { cam, x0, y0 } = gesture;
+    setCamera(cam.cx - (e.clientX - x0) / cam.k, cam.cy - (e.clientY - y0) / cam.k, cam.k);
+  }
+});
+
+function endPointer(e) {
+  if (!touches.has(e.pointerId)) return;
+  touches.delete(e.pointerId);
+  if (!gesture) return;
+  clearTimeout(gesture.hold);
+
+  if (gesture.kind === 'pinch') {
+    if (touches.size === 1) { const [p] = touches.values(); beginPan(p.x, p.y); }   // carry on with one finger
+    else if (touches.size === 0) gesture = null;
+    return;
+  }
+  if (touches.size) return;
+  const g = gesture;
+  gesture = null;
+  svg.classList.remove('panning');
+  if (g.kind === 'press' && e.type === 'pointerup') tapAt(e.clientX, e.clientY, g.type);
+  if (g.kind === 'scrub') endScrub(e.type === 'pointerup');
+  if (e.pointerType === 'mouse') refreshHover();
+}
+svg.addEventListener('pointerup', endPointer);
+svg.addEventListener('pointercancel', endPointer);
+svg.addEventListener('pointerleave', (e) => {
+  if (e.pointerType !== 'mouse' || touches.size) return;
+  pointer.inside = false;
   refreshHover();
 });
 
-svg.addEventListener('pointerleave', () => { pointer.inside = false; refreshHover(); });
+// Wheel and trackpad: zoom around the cursor (a trackpad pinch arrives as
+// a wheel event with ctrlKey).
+svg.addEventListener('wheel', (e) => {
+  e.preventDefault();
+  cancelAnimationFrame(flight);
+  const dy = e.deltaY * (e.deltaMode === 1 ? 16 : 1);
+  const k = camera.k * Math.exp(-dy * (e.ctrlKey ? .01 : .0015));
+  zoomAround(e.clientX, e.clientY, toWorldX(e.clientX), toWorldY(e.clientY), k);
+  refreshHover();
+}, { passive: false });
 
-svg.addEventListener('click', (e) => {
-  const c = hitTest(e.clientX, e.clientY);
-  const f = state.focus;
-
-  if (!c) { stepOut(); return; }                     // background or veil
-  if (c !== state.selected) { select(c); return; }   // first click selects
-
-  // Second click on the selected chapter enters one level deeper.
-  if (!f.book) focusBook(MODEL.books[c.bookIndex]);       // from the Bible or a division
-  else if (f.chapter !== c) focusChapter(c);
-});
+// Safari's own page-pinch would fight the map's.
+document.addEventListener('gesturestart', (e) => e.preventDefault());
 
 addEventListener('keydown', (e) => {
   if (e.key === 'Escape') stepOut();
 });
 
+addEventListener('popstate', () => { if (MODEL) applyHash({ history: 'none' }); });
+
 addEventListener('resize', () => {
+  const was = { ...viewport };
   viewport.w = innerWidth; viewport.h = innerHeight;
-  cancelAnimationFrame(flight);
-  Object.assign(camera, cameraForFocus());
-  renderCamera();
+  if (!MODEL) return;
+  if (layoutFor() !== MODEL.layout) { useLayout(layoutFor()); return; }   // rotated
+  // A mobile address bar showing or hiding only nudges the height: leave
+  // the camera where it is. Otherwise re-frame, unless moved by hand.
+  const barOnly = was.w === viewport.w && Math.abs(was.h - viewport.h) < 140;
+  if (!camera.free && !barOnly) { cancelAnimationFrame(flight); Object.assign(camera, cameraForFocus()); }
+  renderState();
 });
 
 
@@ -896,12 +1218,25 @@ addEventListener('resize', () => {
    START
    ===================================================================== */
 
+let MODELS = null;
+
 async function start() {
   try {
     const [bible, colours] = await Promise.all([loadBible('bible.json'), loadColours('colours.json')]);
-    MODEL = buildModel(bible, WORLD);
     COLOURS = colours;
-    checkModel(MODEL, bible);
+    MODELS = {};
+    for (const [name, world] of Object.entries(WORLDS)) {
+      const model = buildModel(bible, world);
+      model.layout = name;
+      model.chapterSide = Math.sqrt(model.chapters[0].width * model.chapters[0].height);
+      checkModel(model, bible);
+      MODELS[name] = model;
+    }
+    // Both layouts hold the same objects in the same canonical order.
+    console.assert(MODELS.portrait.chapters.every((c, i) => {
+      const o = MODELS.landscape.chapters[i];
+      return c.bookKey === o.bookKey && c.chapter === o.chapter && c.divisionId === o.divisionId;
+    }), 'portrait and landscape should share chapter identity');
   } catch (err) {
     console.error(err);
     $('info').innerHTML = location.protocol === 'file:'
@@ -910,15 +1245,16 @@ async function start() {
     return;
   }
   if (CONFIG.colours) {
-    const missing = MODEL.books.filter((b) => !COLOURS[b.key]).map((b) => b.key);
+    const missing = MODELS.landscape.books.filter((b) => !COLOURS[b.key]).map((b) => b.key);
     if (missing.length) console.warn('No colour for:', missing.join(', '));
   }
   document.body.classList.toggle('no-stars', !CONFIG.showStars);
   $('stars').style.strokeOpacity = CONFIG.starOpacity;
-  drawWorld(MODEL);
-  createLabels(MODEL);
-  Object.assign(camera, cameraForFocus());
-  renderState();
+  $('hint').textContent = COARSE
+    ? 'tap to explore · pinch to zoom · hold to scan'
+    : 'click to select · again to enter · scroll to zoom · esc to return';
+  useLayout(layoutFor());
+  if (location.hash) applyHash({ history: 'none', animate: false });   // deep link
   document.fonts?.ready.then(() => { measureLabels(); renderCamera(); });
 }
 
