@@ -62,6 +62,11 @@
     font-size: calc(var(--fs) * var(--nz, 1) * 1px);
   }
   #numbers text.hover, #numbers text.selected { fill-opacity: 1; font-weight: 500; }
+  /* Stars or numbers, never both at rest: a quick fade when the zoom
+     crosses the legibility threshold. */
+  #stars, #numbers { transition: opacity 220ms; }
+  #numbers, #map.numbers-on #stars { opacity: 0; }
+  #map.numbers-on #numbers { opacity: 1; }
 
   #hover-division-fill { fill: var(--ink); opacity: 0; transition: opacity 240ms; }
   #hover-division-fill.on { opacity: .018; }
@@ -196,6 +201,8 @@ const CONFIG = {
   showMarks: true,        // show the centre marks at all
   markOpacity: 0.5,       // 0–1: brightness of the centre marks
   relativeMarkSize: true, // larger chapters (more verses) get a larger mark
+  markMaxSize: 0.4,       // 0–1: the largest a chapter number may be, as a share of its cell
+  numberMinPx: 8,         // numbers replace stars once a typical chapter's number is this big on screen
   bookLabels: 'short', // book names on the map: 'full' (Genesis) or 'short' (GEN)
   colours: true,       // colour book borders, stars and names from colours.json
 };
@@ -672,22 +679,27 @@ function markScale(c, floor) {
 }
 const starScale = (c) => markScale(c, .4);
 
-// A chapter number's size in world units: about a third of its cell for a
-// typical chapter, scaled by verses, but never wider or taller than fits.
-const NUMBER_SHARE = .32;          // of the cell's side, for a median chapter
+// A chapter number's size in world units. The longest chapters (the top 1%
+// by verses) reach CONFIG.markMaxSize of the cell; the rest scale down from
+// there with area ∝ verses, so the contrast is kept rather than clipped.
+// Never smaller than a floor, never wider than fits (three-digit Psalms).
+let referenceVerses = 1;           // verse count that earns the full size
 const DIGIT_EM = .6;               // IBM Plex Mono's advance, in ems
 function numberSize(c) {
-  const side = Math.sqrt(c.width * c.height);
-  return Math.min(side * NUMBER_SHARE * markScale(c, .55),
-                  c.width * .8 / (String(c.chapter).length * DIGIT_EM),
-                  c.height * .7);
+  const share = CONFIG.relativeMarkSize && c.verses
+    ? Math.min(1, Math.max(.35, Math.sqrt(c.verses / referenceVerses)))
+    : .7;
+  return Math.min(Math.min(c.width, c.height) * CONFIG.markMaxSize * share,
+                  c.width * .7 / (String(c.chapter).length * DIGIT_EM));
 }
 const useNumbers = () => CONFIG.centreMark === 'number';
 
-// Numbers are only drawn where they can be read: below this on-screen size
-// (for a typical chapter) the star stands in; numbers fade in above it.
-// They stop growing once a typical number reaches NUMBER_MAX_PX.
-const NUMBER_MIN_PX = 5, NUMBER_MAX_PX = 24;
+// Numbers are only shown where they can be read: below CONFIG.numberMinPx
+// (for a typical chapter) the star stands in. Switching back to stars waits
+// until a little below that, so a pinch resting on the threshold doesn't
+// flicker. Numbers stop growing once a typical one reaches NUMBER_MAX_PX.
+const NUMBER_HYSTERESIS_PX = .75, NUMBER_MAX_PX = 24;
+let numbersOn = false;
 
 const bookLines = [];
 // A region made of several rectangles, as one path (they never overlap).
@@ -695,7 +707,10 @@ const regionPath = (rects) => rects.map(rectPath).join('');
 
 function drawWorld(model) {
   const counts = model.chapters.map((c) => c.verses).filter(Boolean).sort((a, b) => a - b);
-  if (counts.length) medianVerses = counts[counts.length >> 1];
+  if (counts.length) {
+    medianVerses = counts[counts.length >> 1];
+    referenceVerses = counts[Math.floor((counts.length - 1) * .99)];
+  }
   $('chapter-lines').setAttribute('d', model.chapters.map(rectPath).join(''));
   $('testament-lines').setAttribute('d', model.testaments.map(rectPath).join(''));
   // Only the edges where one division meets another are promoted; edges
@@ -730,7 +745,8 @@ function drawWorld(model) {
       numberEls[c.index] = el;
     }
   }
-  medianNumberSize = .32 * model.chapterSide;
+  const sizes = model.chapters.map(numberSize).sort((a, b) => a - b);
+  medianNumberSize = sizes[sizes.length >> 1];
   markNz = null;
 }
 const numberEls = [];
@@ -798,17 +814,16 @@ function renderCamera() {
   const dot = Math.min(7, 3 * (k / overviewK) ** .28);
   $('stars').style.setProperty('--dot', `${dot}px`);
 
-  // Number marks: crossfade from stars once a typical number is legible,
-  // and damp their growth beyond NUMBER_MAX_PX.
-  let numbersShown = 0, nz = 1;
+  // Number marks: numbers once a typical number is legible, stars below
+  // that; and damp their growth beyond NUMBER_MAX_PX.
+  let nz = 1;
   if (useNumbers()) {
     const typicalPx = medianNumberSize * k;
-    numbersShown = Math.min(1, Math.max(0, (typicalPx - NUMBER_MIN_PX) / 2));
+    const on = numbersOn ? typicalPx >= CONFIG.numberMinPx - NUMBER_HYSTERESIS_PX : typicalPx >= CONFIG.numberMinPx;
+    if (on !== numbersOn) { numbersOn = on; svg.classList.toggle('numbers-on', on); }
     nz = Math.min(1, NUMBER_MAX_PX / typicalPx);
     if (nz !== markNz) { $('numbers').style.setProperty('--nz', nz); markNz = nz; }
   }
-  $('numbers').style.opacity = numbersShown;
-  $('stars').style.opacity = 1 - numbersShown;
 
   // Chapter lines fade in once cells are big enough not to become a haze.
   const cellPx = MODEL.chapterSide * k;
@@ -851,7 +866,7 @@ function renderCamera() {
 
   // Emphasis: over stars, a brighter star and halo; over numbers, the number
   // itself brightens (see syncMarkClasses) and the ring circles it.
-  const overNumbers = numbersShown >= .5;
+  const overNumbers = numbersOn;
   placeStar($('hover-star'), overNumbers ? null : state.hover);
   placeStar($('hover-halo'), overNumbers ? null : state.hover);
   placeStar($('sel-ring'), state.selected);
@@ -925,7 +940,7 @@ function renderState() {
 
   // Breadcrumbs; on a narrow screen the testament is dropped and books use
   // their short key, so the trail fits one line.
-  const f = state.focus, narrow = isNarrow(), crumbs = [['The Bible', () => focusBible()]];
+  const f = state.focus, narrow = isNarrow(), crumbs = [['Bible Game', () => focusBible()]];
   if (f.division) {
     if (!narrow) crumbs.push([f.division.testament, null]);
     crumbs.push([f.division.name, () => focusDivision(f.division)]);
