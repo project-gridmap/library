@@ -104,7 +104,11 @@
 
   /* chrome: almost none */
   .chrome { position: fixed; font-size: var(--chrome-px); letter-spacing: .22em; text-transform: uppercase; line-height: 1.9; }
-  #crumbs { top: calc(18px + env(safe-area-inset-top)); left: calc(24px + env(safe-area-inset-left)); color: var(--ink-3); }
+  /* Top-left stack: the game's clue (when playing), then the breadcrumbs. */
+  #top { position: fixed; top: calc(18px + env(safe-area-inset-top)); left: calc(24px + env(safe-area-inset-left));
+    right: calc(24px + env(safe-area-inset-right)); pointer-events: none; }
+  #top > * { pointer-events: auto; width: fit-content; }
+  #crumbs { position: static; color: var(--ink-3); }
   /* Chrome sits on a patch of background, like the book labels, so it stays
      legible when the map is zoomed underneath it. */
   #crumbs, #info { background: var(--bg); padding: 0 8px; margin-left: -8px; max-width: calc(100vw - 48px); }
@@ -132,7 +136,7 @@
   /* Short (phone landscape): the selection info folds onto one line. */
   @media (max-height: 499px) {
     .chrome { line-height: 1.9; }
-    #crumbs { top: calc(8px + env(safe-area-inset-top)); }
+    #top { top: calc(8px + env(safe-area-inset-top)); }
     #info, #hint { bottom: calc(8px + env(safe-area-inset-bottom)); }
     #info div { display: inline; }
     #info div + div::before { content: ' · '; color: var(--ink-3); }
@@ -140,10 +144,68 @@
   /* Narrow (phone portrait): tighter margins; the hint sits where the
      selection info will later appear. */
   @media (max-width: 699px) {
-    #crumbs { left: calc(16px + env(safe-area-inset-left)); top: calc(12px + env(safe-area-inset-top)); }
+    #top { left: calc(16px + env(safe-area-inset-left)); right: 16px; top: calc(12px + env(safe-area-inset-top)); }
     #info { left: calc(16px + env(safe-area-inset-left)); bottom: calc(12px + env(safe-area-inset-bottom)); }
     #hint { left: calc(16px + env(safe-area-inset-left)); right: 16px; bottom: calc(12px + env(safe-area-inset-bottom)); text-align: left; }
   }
+
+  /* ---- Game (proof of concept) ----
+     Clue top-left; guesses and the Guess button bottom-left (a full-width
+     tray on phones). Feedback is shape, not colour: the division colours
+     already use green and yellow. */
+  #game-head, #game-tray { display: none; }
+  body.game #game-head, body.game #game-tray { display: block; }
+  body.game #info, body.game #hint { display: none; }
+  #game-head { background: var(--bg); padding: 0 8px 6px; margin-left: -8px; }
+  .game-meta { font-size: var(--chrome-px); letter-spacing: .22em; text-transform: uppercase; color: var(--ink-2); line-height: 1.9; }
+  .clue { font-size: 20px; line-height: 1.35; color: var(--ink); max-width: 30ch; margin: 2px 0 0; text-wrap: balance; }
+  .clue::before { content: '\201C'; } .clue::after { content: '\201D'; }
+  .answer { font-size: var(--chrome-px); letter-spacing: .22em; text-transform: uppercase; color: var(--c, var(--ink)); line-height: 2.2; }
+  .answer:empty { display: none; }
+
+  #game-tray {
+    position: fixed; left: calc(24px + env(safe-area-inset-left)); bottom: calc(18px + env(safe-area-inset-bottom));
+    width: 17rem; background: var(--bg); padding: 6px 8px 0; margin-left: -8px;
+    font-size: var(--chrome-px); letter-spacing: .16em; text-transform: uppercase;
+  }
+  .guess-row { display: grid; grid-template-columns: 1fr auto 8.5em; align-items: center; gap: 12px; height: 24px; color: var(--ink-2); white-space: nowrap; }
+  .guess-row.empty { color: var(--ink-3); }
+  .guess-row.found { color: var(--ink); }
+  .guess-row.legend { height: 16px; color: var(--ink-3); }
+  .guess-row .dir { text-align: right; }
+  .fb { display: inline-block; width: 9px; height: 9px; margin-left: 5px; border: 1px solid var(--ink-2); vertical-align: middle; }
+  .fb.yes { background: var(--ink); border-color: var(--ink); }
+  .guess-row.empty .fb { border-color: var(--line-ch); }
+  .legend span span { display: inline-block; width: 11px; margin-left: 5px; text-align: center; }
+  #guess-btn {
+    display: block; width: 100%; min-height: 42px; margin: 10px 0 0; padding: 0 12px;
+    background: var(--bg); color: var(--ink); border: 1px solid var(--ink-2); border-radius: 0;
+    font: inherit; letter-spacing: .2em; text-transform: uppercase; cursor: pointer;
+  }
+  #guess-btn:hover:not(:disabled) { border-color: var(--ink); }
+  #guess-btn:disabled { color: var(--ink-3); border-color: var(--line-ch); cursor: default; }
+  .legend-caption { display: none; color: var(--ink-3); line-height: 1.9; }
+  @media (max-width: 699px) {
+    .clue { font-size: 17px; }
+    #game-tray { left: calc(16px + env(safe-area-inset-left)); right: calc(16px + env(safe-area-inset-right));
+      bottom: calc(10px + env(safe-area-inset-bottom)); width: auto; }
+    /* Phones: guesses in two columns, direction as an arrow alone. */
+    #guess-rows { display: grid; grid-template-columns: 1fr 1fr; column-gap: 18px; }
+    .guess-row { grid-template-columns: 1fr auto 1.2em; gap: 8px; height: 26px; }
+    .guess-row.legend, .guess-row .w { display: none; }
+    .legend-caption { display: block; grid-column: 1 / -1; }
+  }
+  @media (max-height: 499px) {
+    .clue { font-size: 16px; }
+    #game-tray { bottom: calc(8px + env(safe-area-inset-bottom)); }
+    .guess-row { height: 20px; }
+    #guess-btn { min-height: 34px; margin-top: 6px; }
+  }
+
+  /* World layers: what the guesses have ruled out, and the guesses themselves. */
+  #ruled-out   { fill: var(--bg); opacity: .62; pointer-events: none; }
+  #guess-cells { fill: none; stroke: var(--ink); stroke-width: 1.25; stroke-dasharray: 3 2; }
+  #answer-cell { fill: var(--c, var(--ink)); fill-opacity: .12; stroke: var(--c, var(--ink)); stroke-width: 2; }
 
   #tooltip {
     position: fixed; pointer-events: none; opacity: 0; transition: opacity 120ms;
@@ -171,6 +233,9 @@
     <rect id="sel-chapter" visibility="hidden"/>
     <g id="stars"></g>
     <g id="numbers"></g>
+    <path id="ruled-out"/>
+    <path id="guess-cells"/>
+    <path id="answer-cell"/>
     <path id="focus-veil"/>
   </g>
   <g id="overlay">
@@ -183,7 +248,18 @@
   </g>
 </svg>
 
-<nav id="crumbs" class="chrome"></nav>
+<div id="top">
+  <header id="game-head">
+    <div class="game-meta" id="game-meta"></div>
+    <p class="clue" id="clue"></p>
+    <div class="answer" id="answer"></div>
+  </header>
+  <nav id="crumbs" class="chrome"></nav>
+</div>
+<div id="game-tray">
+  <div id="guess-rows"></div>
+  <button id="guess-btn" type="button"></button>
+</div>
 <div id="info" class="chrome"></div>
 <div id="hint" class="chrome"></div>
 <div id="safe"></div>
@@ -203,6 +279,11 @@ const CONFIG = {
   relativeMarkSize: true, // larger chapters (more verses) get a larger mark
   markMaxSize: 0.4,       // 0–1: the largest a chapter number may be, as a share of its cell
   numberMinPx: 8,         // numbers replace stars once a typical chapter's number is this big on screen
+  game: {
+    enabled: true,        // show the Bible Game (clue, guesses) on top of the map
+    maxGuesses: 5,
+    dimRuledOut: true,    // dim every chapter the guesses so far have ruled out
+  },
   bookLabels: 'short', // book names on the map: 'full' (Genesis) or 'short' (GEN)
   colours: true,       // colour book borders, stars and names from colours.json
 };
@@ -589,11 +670,20 @@ function insets() {
   const base = isNarrow() ? { top: 48, right: 14, bottom: 110, left: 34 }   // left: testament labels
     : viewport.h < 500 ? { top: 38, right: 20, bottom: 36, left: 40 }
     : { top: 64, right: 64, bottom: 104, left: 64 };
-  return {
+  const i = {
     top: base.top + px(safe.paddingTop), right: base.right + px(safe.paddingRight),
     bottom: base.bottom + px(safe.paddingBottom), left: base.left + px(safe.paddingLeft),
   };
+  // The game's clue sits above the map; its tray below it on phones, or
+  // beside it (left) on wider screens.
+  if (gameChrome) {
+    i.top = Math.max(i.top, gameChrome.top);
+    if (gameChrome.below) i.bottom = Math.max(i.bottom, gameChrome.bottom);
+    else i.left = Math.max(i.left, gameChrome.left);
+  }
+  return i;
 }
+let gameChrome = null;   // measured screen space taken by the game's chrome
 
 // Camera that centres a world rectangle in the clear part of the screen.
 // `extra` adds breathing room; `fill` caps how much of the screen it may
@@ -795,6 +885,7 @@ function createLabels(model) {
 }
 function measureLabels() {
   const px = labelPx();
+  labels.testaments.forEach((l) => { l.width = measure(l.el.textContent, px + .5, .32); });
   labels.books.forEach((l) => {
     l.width.full = measure(l.text.full, px, .14);
     l.width.num = measure(l.text.num, px, .14);
@@ -829,9 +920,11 @@ function renderCamera() {
   const cellPx = MODEL.chapterSide * k;
   $('chapter-lines').style.opacity = Math.min(1, Math.max(0, (cellPx - 6) / 6));
 
-  for (const { t, el } of labels.testaments) {
+  for (const l of labels.testaments) {
+    const { t, el } = l;
     const x = toScreenX(t.x) - 22, y = toScreenY(t.y + t.height / 2);
     el.setAttribute('transform', `translate(${x} ${y}) rotate(-90)`);
+    el.setAttribute('visibility', l.width + 12 <= t.height * k ? 'visible' : 'hidden');
   }
 
   for (const l of labels.books) {
@@ -959,7 +1052,11 @@ function renderState() {
   });
 
   renderCamera();
+  mapListeners.forEach((f) => f());
 }
+// Anything built on the map (the game) can follow its state here, and
+// redraw its own world layers whenever the world is (re)drawn.
+const mapListeners = [], worldListeners = [];
 
 let numSelected = null;
 function syncSelectionClasses() {
@@ -999,6 +1096,7 @@ function useLayout(name) {
   marked.hover = marked.selected = null;
   drawWorld(MODEL);
   createLabels(MODEL);
+  worldListeners.forEach((f) => f());
   cancelAnimationFrame(flight);
   Object.assign(camera, cameraForFocus(), { free: false });
   renderState();
@@ -1294,6 +1392,7 @@ document.addEventListener('gesturestart', (e) => e.preventDefault());
 
 addEventListener('keydown', (e) => {
   if (e.key === 'Escape') stepOut();
+  if (e.key === 'Enter' && CONFIG.game.enabled) makeGuess();
 });
 
 addEventListener('popstate', () => { if (MODEL) applyHash({ history: 'none' }); });
@@ -1302,6 +1401,7 @@ addEventListener('resize', () => {
   const was = { ...viewport };
   viewport.w = innerWidth; viewport.h = innerHeight;
   if (!MODEL) return;
+  measureGameChrome();
   if (layoutFor() !== MODEL.layout) { useLayout(layoutFor()); return; }   // rotated
   // A mobile address bar showing or hiding only nudges the height: leave
   // the camera where it is. Otherwise re-frame, unless moved by hand.
@@ -1309,6 +1409,158 @@ addEventListener('resize', () => {
   if (!camera.free && !barOnly) { cancelAnimationFrame(flight); Object.assign(camera, cameraForFocus()); }
   renderState();
 });
+
+
+/* =====================================================================
+   7. GAME (proof of concept)
+   A Wordle-like layer on top of the map: guess the chapter from a short
+   summary in CONFIG.game.maxGuesses tries. It uses the map only through
+   its public surface: the selection (state.selected, select), camera focus
+   (focusChapter, focusBible), the model, and the listeners above. Game
+   state is held by canonical chapter index, so it survives a layout switch.
+   ===================================================================== */
+
+// Today's puzzle. (The full game will choose one per day.)
+const PUZZLE = { chapter: 'REV.11', clue: 'A cosmic battle ensues between good and evil' };
+
+const game = { answer: -1, guesses: [], over: false, won: false };
+
+const chapterById = (id) => {
+  const [key, n] = id.split('.');
+  return MODEL.books.find((b) => b.key === key)?.chapters[Number(n) - 1] ?? null;
+};
+const guessed = (c) => game.guesses.some((g) => g.index === c.index);
+
+// A guess's feedback: which levels of the hierarchy it shares with the
+// answer, and whether the answer comes earlier or later in canonical order.
+function judge(c, answer) {
+  return {
+    index: c.index,
+    testament: c.testamentId === answer.testamentId,
+    division: c.divisionId === answer.divisionId,
+    book: c.bookIndex === answer.bookIndex,
+    direction: answer.index > c.index ? 'later' : answer.index < c.index ? 'earlier' : 'here',
+  };
+}
+
+// Is chapter c still consistent with every guess so far?
+function stillPossible(c) {
+  return game.guesses.every((g) => {
+    const x = MODEL.chapters[g.index];
+    if (c === x) return false;
+    return (c.testamentId === x.testamentId) === g.testament
+      && (c.divisionId === x.divisionId) === g.division
+      && (c.bookIndex === x.bookIndex) === g.book
+      && (g.direction === 'later' ? c.index > x.index : c.index < x.index);
+  });
+}
+
+function makeGuess() {
+  const c = state.selected;
+  if (game.over || !c || guessed(c)) return;
+  const answer = MODEL.chapters[game.answer];
+  game.guesses.push(judge(c, answer));
+  if (c === answer) game.over = game.won = true;
+  else if (game.guesses.length >= CONFIG.game.maxGuesses) game.over = true;
+  renderGame();
+  renderGameMap();
+  // Reveal: fly to the answer's book, so it's seen among its neighbours
+  // (and any nearby guesses) rather than filling the screen alone.
+  if (game.over) { select(answer); focusBook(MODEL.books[answer.bookIndex]); }
+}
+
+function resetGame() {
+  Object.assign(game, { guesses: [], over: false, won: false });
+  select(null);
+  renderGame();
+  renderGameMap();
+  focusBible();
+}
+
+// --- Game rendering: chrome ---
+
+const shortRef = (c) => `${c.bookKey} ${c.chapter}`;
+
+function renderGame() {
+  const n = game.guesses.length, max = CONFIG.game.maxGuesses;
+  const answer = MODEL.chapters[game.answer];
+  $('game-meta').textContent = game.won ? `Solved in ${n} of ${max}`
+    : game.over ? 'Out of guesses'
+    : `Guess ${n + 1} of ${max}`;
+  $('clue').textContent = PUZZLE.clue;
+  $('answer').textContent = game.over ? chapterRef(answer) : '';
+  tint($('answer'), game.over ? MODEL.books[answer.bookIndex] : null);
+
+  // Rows: a legend, the guesses so far, then empty slots, so the tray never
+  // changes height (and the map never shifts) as guesses are made.
+  const rows = [
+    `<div class="legend-caption">■ = same testament · division · book</div>`,
+    `<div class="guess-row legend"><span></span><span><span>T</span><span>D</span><span>B</span></span><span></span></div>`,
+  ];
+  for (let i = 0; i < max; i++) {
+    const g = game.guesses[i];
+    if (!g) {
+      rows.push(`<div class="guess-row empty"><span>·</span><span>${'<i class="fb"></i>'.repeat(3)}</span><span></span></div>`);
+      continue;
+    }
+    const c = MODEL.chapters[g.index];
+    const fb = [g.testament, g.division, g.book].map((ok) => `<i class="fb${ok ? ' yes' : ''}"></i>`).join('');
+    // The word is dropped on phones, leaving the arrow.
+    const dir = g.direction === 'here' ? '✓<span class="w"> found</span>'
+      : g.direction === 'later' ? '<span class="w">later </span>→' : '←<span class="w"> earlier</span>';
+    rows.push(`<div class="guess-row${g.direction === 'here' ? ' found' : ''}"><span>${shortRef(c)}</span><span>${fb}</span><span class="dir">${dir}</span></div>`);
+  }
+  $('guess-rows').innerHTML = rows.join('');
+  renderGuessButton();
+}
+
+// The Guess button follows the selection on the map.
+function renderGuessButton() {
+  const btn = $('guess-btn'), c = state.selected;
+  const [label, enabled] = game.over ? ['Play again', true]
+    : !c ? ['Select a chapter', false]
+    : guessed(c) ? [`${chapterRef(c)} · already guessed`, false]
+    : [`Guess ${chapterRef(c)}`, true];
+  if (btn.textContent !== label) btn.textContent = label;
+  btn.disabled = !enabled;
+}
+
+// --- Game rendering: world layers (redrawn whenever the world is) ---
+
+function renderGameMap() {
+  if (!MODEL || !CONFIG.game.enabled) return;
+  // Ruled out: whole books where every chapter is out, otherwise chapters.
+  let out = '';
+  if (CONFIG.game.dimRuledOut && game.guesses.length && !game.over) {
+    for (const b of MODEL.books) {
+      const gone = b.chapters.filter((c) => !stillPossible(c));
+      out += gone.length === b.chapters.length ? rectPath(b) : gone.map(rectPath).join('');
+    }
+  }
+  $('ruled-out').setAttribute('d', out);
+  const answer = MODEL.chapters[game.answer];
+  $('guess-cells').setAttribute('d', game.guesses
+    .map((g) => MODEL.chapters[g.index]).filter((c) => c !== answer).map(rectPath).join(''));
+  $('answer-cell').setAttribute('d', game.over ? rectPath(answer) : '');
+  tint($('answer-cell'), game.over ? MODEL.books[answer.bookIndex] : null);
+}
+
+// Screen space the game's chrome takes, so the map frames around it.
+function measureGameChrome() {
+  if (!CONFIG.game.enabled) { gameChrome = null; return; }
+  const top = $('top').getBoundingClientRect(), tray = $('game-tray').getBoundingClientRect();
+  gameChrome = { top: top.bottom + 14, below: isNarrow(), bottom: viewport.h - tray.top + 12, left: tray.right + 40 };
+}
+
+function startGame() {
+  document.body.classList.add('game');
+  game.answer = chapterById(PUZZLE.chapter).index;
+  $('guess-btn').onclick = () => (game.over ? resetGame() : makeGuess());
+  mapListeners.push(renderGuessButton);
+  worldListeners.push(renderGameMap);
+  renderGame();
+  measureGameChrome();
+}
 
 
 /* =====================================================================
@@ -1351,9 +1603,15 @@ async function start() {
   $('hint').textContent = COARSE
     ? 'tap to explore · pinch to zoom · hold to scan'
     : 'click to select · again to enter · scroll to zoom · esc to return';
+  if (CONFIG.game.enabled) { MODEL = MODELS[layoutFor()]; startGame(); }
   useLayout(layoutFor());
   if (location.hash) applyHash({ history: 'none', animate: false });   // deep link
-  document.fonts?.ready.then(() => { measureLabels(); renderCamera(); });
+  document.fonts?.ready.then(() => {
+    measureLabels();
+    measureGameChrome();                       // the clue's height depends on the font
+    if (!camera.free) Object.assign(camera, cameraForFocus());
+    renderCamera();
+  });
 }
 
 start();
