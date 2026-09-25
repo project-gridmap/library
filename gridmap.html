@@ -31,42 +31,44 @@
   /* world-space geometry: strokes stay hairline at every zoom */
   #world path, #world rect { vector-effect: non-scaling-stroke; }
   #chapter-lines   { fill: none; stroke: var(--line-ch); stroke-width: 1; }
-  #book-lines      { fill: none; stroke: var(--line-bk); stroke-width: 1; }
+  /* --c is a book's colour from colours.json; unset means monochrome. */
+  #book-lines path { fill: none; stroke: var(--c, var(--line-bk)); stroke-width: 1; }
+  #book-lines path.tinted { stroke-opacity: .7; }
   #testament-lines { fill: none; stroke: var(--line-ts); stroke-width: 1.5; }
-  #stars           { fill: none; stroke: var(--ink); stroke-linecap: round; }
+  #stars           { fill: none; stroke-linecap: round; }
+  #stars path      { stroke: var(--c, var(--ink)); }
 
   #hover-book-fill  { fill: var(--ink); opacity: 0; transition: opacity 180ms; }
-  #hover-book-line  { fill: none; stroke: var(--ink); stroke-width: 1; opacity: 0; transition: opacity 180ms; }
+  #hover-book-line  { fill: none; stroke: var(--c, var(--ink)); stroke-width: 1; opacity: 0; transition: opacity 180ms; }
   #hover-book-fill.on { opacity: .028; }
-  #hover-book-line.on { opacity: .55; }
+  #hover-book-line.on { opacity: 1; }
   #hover-chapter    { fill: var(--ink); opacity: 0; }
   #hover-chapter.on { opacity: .07; }
 
-  #sel-book         { fill: none; stroke: var(--ink); stroke-width: 1.5; }
-  #sel-chapter      { fill: var(--ink); fill-opacity: .1; stroke: var(--ink); stroke-width: 1; }
+  #sel-book         { fill: none; stroke: var(--c, var(--ink)); stroke-width: 1.5; }
+  #sel-chapter      { fill: var(--c, var(--ink)); fill-opacity: .1; stroke: var(--c, var(--ink)); stroke-width: 1; }
   #focus-veil       { fill: var(--bg); fill-rule: evenodd; opacity: 0; transition: opacity 500ms; pointer-events: none; }
   #focus-veil.on    { opacity: .66; }
 
   /* screen-space overlay: labels and star emphasis */
   #overlay text { font-family: var(--font); pointer-events: none; }
   .book-label {
-    font-size: 9px; letter-spacing: .14em; fill: var(--ink-3);
-    dominant-baseline: central; transition: fill 180ms;
+    font-size: 9px; letter-spacing: .14em; fill: var(--c, var(--ink)); opacity: .72;
+    dominant-baseline: central; transition: opacity 180ms;
   }
   .label-bg { fill: var(--bg); }
-  .book-label.hover    { fill: var(--ink-2); }
-  .book-label.selected { fill: var(--ink); }
+  .book-label.hover, .book-label.selected { opacity: 1; }
   .testament-label {
-    font-size: 9.5px; letter-spacing: .32em; fill: var(--ink-3);
+    font-size: 9.5px; letter-spacing: .32em; fill: var(--ink-2);
     text-anchor: middle; transition: fill 250ms;
   }
   .testament-label.selected { fill: var(--ink); }
   .chapter-num { font-size: 10px; fill: var(--ink-3); opacity: 0; transition: opacity 400ms 150ms; }
   .chapter-num.on { opacity: 1; }
   .chapter-num.selected { fill: var(--ink); }
-  #hover-star  { fill: var(--ink); }
-  #hover-halo  { fill: none; stroke: var(--ink); stroke-opacity: .28; }
-  #sel-ring    { fill: none; stroke: var(--ink); stroke-width: 1; }
+  #hover-star  { fill: var(--c, var(--ink)); }
+  #hover-halo  { fill: none; stroke: var(--c, var(--ink)); stroke-opacity: .35; }
+  #sel-ring    { fill: none; stroke: var(--c, var(--ink)); stroke-width: 1; }
   body.no-stars :is(#stars, #hover-star, #hover-halo, #sel-ring) { display: none; }
 
   /* chrome: almost none */
@@ -80,7 +82,7 @@
   #info div:nth-child(1) { color: var(--ink-3); }
   #info div:nth-child(2) { color: var(--ink-2); }
   #info div:nth-child(3) { color: var(--ink); }
-  #hint { bottom: 18px; right: 24px; color: var(--ink-3); opacity: .7; text-align: right; transition: opacity 300ms; }
+  #hint { bottom: 18px; right: 24px; color: var(--ink-2); text-align: right; transition: opacity 300ms; }
   #hint.away { opacity: 0; }
 
   #tooltip {
@@ -89,7 +91,7 @@
     padding: 5px 8px; background: var(--bg); border-left: 1px solid var(--line-bk);
   }
   #tooltip.on { opacity: 1; }
-  #tooltip .b { color: var(--ink); }
+  #tooltip .b { color: var(--c, var(--ink)); }
   #tooltip .c { color: var(--ink-2); }
 </style>
 </head>
@@ -100,12 +102,12 @@
     <rect id="hover-book-fill"/>
     <rect id="hover-chapter"/>
     <path id="chapter-lines"/>
-    <path id="book-lines"/>
+    <g id="book-lines"></g>
     <path id="testament-lines"/>
     <rect id="hover-book-line"/>
     <rect id="sel-book" visibility="hidden"/>
     <rect id="sel-chapter" visibility="hidden"/>
-    <path id="stars"/>
+    <g id="stars"></g>
     <path id="focus-veil"/>
   </g>
   <g id="overlay">
@@ -132,7 +134,9 @@
 
 const CONFIG = {
   showStars: true,     // the white point at the centre of every chapter cell
+  starOpacity: 0.5,      // 0–1: brightness of the central stars
   bookLabels: 'short', // book names on the map: 'full' (Genesis) or 'short' (GEN)
+  colours: true,       // colour book borders, stars and names from colours.json
 };
 
 /* =====================================================================
@@ -152,6 +156,31 @@ async function loadBible(url) {
     name: `${t.name} Testament`,
     books: t.divisions.flatMap((d) => d.books.map(({ key, name, chapters }) => ({ key, name, chapters }))),
   }));
+}
+
+
+// Book colours from colours.json: { GEN: '#c6feff', ... }. Presentation
+// only, so it stays out of the geometry model. Optional: without it the
+// map is monochrome.
+let COLOURS = {};
+
+async function loadColours(url) {
+  try {
+    const res = await fetch(url);
+    if (!res.ok) throw new Error(`${url}: ${res.status}`);
+    return await res.json();
+  } catch (err) {
+    console.warn('No book colours:', err.message);
+    return {};
+  }
+}
+
+const colourOf = (book) => (CONFIG.colours && book && COLOURS[book.key]) || null;
+
+// Hand a book's colour to an element as --c (or clear it).
+function tint(el, book) {
+  const c = colourOf(book);
+  if (c) el.style.setProperty('--c', c); else el.style.removeProperty('--c');
 }
 
 
@@ -333,13 +362,16 @@ const toScreenY = (y) => (y - camera.cy) * camera.k + viewport.h / 2;
 const toWorldX  = (sx) => (sx - viewport.w / 2) / camera.k + camera.cx;
 const toWorldY  = (sy) => (sy - viewport.h / 2) / camera.k + camera.cy;
 
+const OVERVIEW_FRAME = { pad: 64, padBottom: 104 };
+
 // Camera that frames a world rectangle; `fill` caps how much of the
 // screen it may occupy so tiny books keep some surrounding world.
-function frame(rect, { pad = 64, fill = 1 } = {}) {
-  const availW = Math.max(1, viewport.w - pad * 2), availH = Math.max(1, viewport.h - pad * 2);
+// `padBottom` leaves room for the selection info in the corner.
+function frame(rect, { pad = 64, padBottom = pad, fill = 1 } = {}) {
+  const availW = Math.max(1, viewport.w - pad * 2), availH = Math.max(1, viewport.h - pad - padBottom);
   const k = Math.min(availW / rect.width, availH / rect.height,
                      (viewport.w * fill) / rect.width, (viewport.h * fill) / rect.height);
-  return { cx: rect.x + rect.width / 2, cy: rect.y + rect.height / 2, k };
+  return { cx: rect.x + rect.width / 2, cy: rect.y + rect.height / 2 + (padBottom - pad) / 2 / k, k };
 }
 
 let flight = null;
@@ -382,10 +414,15 @@ const svgEl = (tag, attrs = {}, parent) => {
 
 function drawWorld(model) {
   $('chapter-lines').setAttribute('d', model.chapters.map(rectPath).join(''));
-  $('book-lines').setAttribute('d', model.books.map(rectPath).join(''));
   $('testament-lines').setAttribute('d', model.testaments.map(rectPath).join(''));
-  // Zero-length round-capped segments: every star is a screen-sized dot.
-  $('stars').setAttribute('d', model.chapters.map((c) => `M${c.centerX} ${c.centerY}h.001`).join(''));
+  // One border path and one star path per book, so each can take its colour.
+  for (const b of model.books) {
+    const line = svgEl('path', { d: rectPath(b) }, $('book-lines'));
+    tint(line, b);
+    line.classList.toggle('tinted', !!colourOf(b));
+    // Zero-length round-capped segments: every star is a screen-sized dot.
+    tint(svgEl('path', { d: b.chapters.map((c) => `M${c.centerX} ${c.centerY}h.001`).join('') }, $('stars')), b);
+  }
 }
 
 // Label measurement (for "only where space permits").
@@ -405,6 +442,7 @@ function createLabels(model) {
   model.books.forEach((b) => {
     // A label sits on the book's top boundary, on a patch of background.
     const g = svgEl('g', {}, $('book-labels'));
+    tint(g, b);
     const bg = svgEl('rect', { class: 'label-bg', y: -6, height: 12 }, g);
     const el = svgEl('text', { class: 'book-label', x: 4 }, g);
     el.textContent = (CONFIG.bookLabels === 'short' ? b.key : b.name).toUpperCase();
@@ -441,7 +479,7 @@ function renderCamera() {
     `translate(${viewport.w / 2 - camera.cx * k} ${viewport.h / 2 - camera.cy * k}) scale(${k})`);
 
   // Stars grow a little as you approach, but stay stars.
-  const overviewK = frame(WORLD).k;
+  const overviewK = frame(WORLD, OVERVIEW_FRAME).k;
   $('stars').style.strokeWidth = Math.min(7, 3 * (k / overviewK) ** .28);
 
   for (const { t, el } of labels.testaments) {
@@ -484,6 +522,7 @@ function renderState() {
   $('hover-book-fill').classList.toggle('on', !!hb);
   $('hover-book-line').classList.toggle('on', !!hb);
   if (hb) { setRect($('hover-book-fill'), hb); setRect($('hover-book-line'), hb); }
+  for (const id of ['hover-book-line', 'hover-star', 'hover-halo']) tint($(id), hb);
   $('hover-chapter').classList.toggle('on', !!state.hover);
   if (state.hover) setRect($('hover-chapter'), state.hover);
 
@@ -491,6 +530,7 @@ function renderState() {
   $('sel-chapter').setAttribute('visibility', s ? 'visible' : 'hidden');
   $('sel-book').setAttribute('visibility', s ? 'visible' : 'hidden');
   if (s) { setRect($('sel-chapter'), s); setRect($('sel-book'), MODEL.books[s.bookIndex]); }
+  for (const id of ['sel-book', 'sel-chapter', 'sel-ring']) tint($(id), s && MODEL.books[s.bookIndex]);
 
   labels.books.forEach(({ b, el }) => {
     el.classList.toggle('hover', hb === b);
@@ -551,7 +591,7 @@ function focusRect() {
 function cameraForFocus() {
   if (state.focus.level === 'chapter') return frame(state.focus.chapter, { pad: 96, fill: .42 });
   if (state.focus.level === 'book') return frame(state.focus.book, { pad: 88, fill: .72 });
-  return frame(WORLD, { pad: 64 });
+  return frame(WORLD, OVERVIEW_FRAME);
 }
 
 function setFocus(level, book = null, chapter = null) {
@@ -572,6 +612,7 @@ function showTooltip(c, sx, sy) {
   tooltip.classList.toggle('on', !!c);
   if (!c) return;
   tooltip.querySelector('.b').textContent = c.book;
+  tint(tooltip, MODEL.books[c.bookIndex]);
   tooltip.querySelector('.c').textContent = `Chapter ${c.chapter}`;
   const w = tooltip.offsetWidth, h = tooltip.offsetHeight;
   const x = sx + 18 + w > viewport.w ? sx - 18 - w : sx + 18;
@@ -645,7 +686,9 @@ addEventListener('resize', () => {
 
 async function start() {
   try {
-    MODEL = layoutBible(await loadBible('bible.json'), WORLD);
+    const [bible, colours] = await Promise.all([loadBible('bible.json'), loadColours('colours.json')]);
+    MODEL = layoutBible(bible, WORLD);
+    COLOURS = colours;
   } catch (err) {
     console.error(err);
     $('info').innerHTML = location.protocol === 'file:'
@@ -654,7 +697,12 @@ async function start() {
     return;
   }
   checkModel(MODEL);
+  if (CONFIG.colours) {
+    const missing = MODEL.books.filter((b) => !COLOURS[b.key]).map((b) => b.key);
+    if (missing.length) console.warn('No colour for:', missing.join(', '));
+  }
   document.body.classList.toggle('no-stars', !CONFIG.showStars);
+  $('stars').style.strokeOpacity = CONFIG.starOpacity;
   drawWorld(MODEL);
   createLabels(MODEL);
   Object.assign(camera, cameraForFocus());
