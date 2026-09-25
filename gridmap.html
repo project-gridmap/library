@@ -1,0 +1,647 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Project Gridmap</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg:       #0a0b0c;
+    --ink:      #f2efe8;   /* stars, strongest lines, primary text */
+    --ink-2:    #a19d94;   /* secondary text */
+    --ink-3:    #5c5954;   /* faint text */
+    --line-ch:  #2a2c2e;   /* chapter boundaries: fine */
+    --line-bk:  #7d7a74;   /* book boundaries: medium */
+    --line-ts:  #d9d5cd;   /* testament boundaries: strongest */
+    --font: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
+  }
+  html, body {
+    margin: 0; height: 100%; overflow: hidden;
+    background: var(--bg); color: var(--ink);
+    font-family: var(--font);
+    -webkit-font-smoothing: antialiased;
+    user-select: none; -webkit-user-select: none;
+  }
+  svg#map { display: block; position: fixed; inset: 0; width: 100%; height: 100%; }
+  svg#map.over-chapter { cursor: pointer; }
+
+  /* world-space geometry: strokes stay hairline at every zoom */
+  #world path, #world rect { vector-effect: non-scaling-stroke; }
+  #chapter-lines   { fill: none; stroke: var(--line-ch); stroke-width: 1; }
+  #book-lines      { fill: none; stroke: var(--line-bk); stroke-width: 1; }
+  #testament-lines { fill: none; stroke: var(--line-ts); stroke-width: 1.5; }
+  #stars           { fill: none; stroke: var(--ink); stroke-linecap: round; }
+
+  #hover-book-fill  { fill: var(--ink); opacity: 0; transition: opacity 180ms; }
+  #hover-book-line  { fill: none; stroke: var(--ink); stroke-width: 1; opacity: 0; transition: opacity 180ms; }
+  #hover-book-fill.on { opacity: .028; }
+  #hover-book-line.on { opacity: .55; }
+  #hover-chapter    { fill: var(--ink); opacity: 0; }
+  #hover-chapter.on { opacity: .07; }
+
+  #sel-book         { fill: none; stroke: var(--ink); stroke-width: 1.5; }
+  #sel-chapter      { fill: var(--ink); fill-opacity: .1; stroke: var(--ink); stroke-width: 1; }
+  #focus-veil       { fill: var(--bg); fill-rule: evenodd; opacity: 0; transition: opacity 500ms; pointer-events: none; }
+  #focus-veil.on    { opacity: .66; }
+
+  /* screen-space overlay: labels and star emphasis */
+  #overlay text { font-family: var(--font); pointer-events: none; }
+  .book-label {
+    font-size: 9px; letter-spacing: .14em; fill: var(--ink-3);
+    dominant-baseline: central; transition: fill 180ms;
+  }
+  .label-bg { fill: var(--bg); }
+  .book-label.hover    { fill: var(--ink-2); }
+  .book-label.selected { fill: var(--ink); }
+  .testament-label {
+    font-size: 9.5px; letter-spacing: .32em; fill: var(--ink-3);
+    text-anchor: middle; transition: fill 250ms;
+  }
+  .testament-label.selected { fill: var(--ink); }
+  .chapter-num { font-size: 10px; fill: var(--ink-3); opacity: 0; transition: opacity 400ms 150ms; }
+  .chapter-num.on { opacity: 1; }
+  .chapter-num.selected { fill: var(--ink); }
+  #hover-star  { fill: var(--ink); }
+  #hover-halo  { fill: none; stroke: var(--ink); stroke-opacity: .28; }
+  #sel-ring    { fill: none; stroke: var(--ink); stroke-width: 1; }
+
+  /* chrome: almost none */
+  .chrome { position: fixed; font-size: 10px; letter-spacing: .22em; text-transform: uppercase; line-height: 1.9; }
+  #crumbs { top: 18px; left: 24px; color: var(--ink-3); }
+  #crumbs span { cursor: pointer; transition: color 150ms; }
+  #crumbs span:hover, #crumbs span.current { color: var(--ink-2); }
+  #crumbs span.current { cursor: default; }
+  #crumbs i { font-style: normal; padding: 0 .7em; }
+  #info { bottom: 18px; left: 24px; }
+  #info div:nth-child(1) { color: var(--ink-3); }
+  #info div:nth-child(2) { color: var(--ink-2); }
+  #info div:nth-child(3) { color: var(--ink); }
+  #hint { bottom: 18px; right: 24px; color: var(--ink-3); opacity: .7; text-align: right; transition: opacity 300ms; }
+  #hint.away { opacity: 0; }
+
+  #tooltip {
+    position: fixed; pointer-events: none; opacity: 0; transition: opacity 120ms;
+    font-size: 10px; letter-spacing: .16em; text-transform: uppercase; line-height: 1.6;
+    padding: 5px 8px; background: var(--bg); border-left: 1px solid var(--line-bk);
+  }
+  #tooltip.on { opacity: 1; }
+  #tooltip .b { color: var(--ink); }
+  #tooltip .c { color: var(--ink-2); }
+</style>
+</head>
+<body>
+
+<svg id="map" xmlns="http://www.w3.org/2000/svg">
+  <g id="world">
+    <rect id="hover-book-fill"/>
+    <rect id="hover-chapter"/>
+    <path id="chapter-lines"/>
+    <path id="book-lines"/>
+    <path id="testament-lines"/>
+    <rect id="hover-book-line"/>
+    <rect id="sel-book" visibility="hidden"/>
+    <rect id="sel-chapter" visibility="hidden"/>
+    <path id="stars"/>
+    <path id="focus-veil"/>
+  </g>
+  <g id="overlay">
+    <g id="testament-labels"></g>
+    <g id="book-labels"></g>
+    <g id="chapter-nums"></g>
+    <circle id="hover-halo" r="9" visibility="hidden"/>
+    <circle id="hover-star" r="3" visibility="hidden"/>
+    <circle id="sel-ring"   r="8" visibility="hidden"/>
+  </g>
+</svg>
+
+<nav id="crumbs" class="chrome"></nav>
+<div id="info" class="chrome"></div>
+<div id="hint" class="chrome">click to select &middot; again to enter &middot; esc to return</div>
+<div id="tooltip"><div class="b"></div><div class="c"></div></div>
+
+<script>
+'use strict';
+
+/* =====================================================================
+   1. BIBLE DATA
+   The 66-book Protestant canon, in canonical order: [name, chapters].
+   ===================================================================== */
+
+const BIBLE = [
+  { id: 'OT', name: 'Old Testament', books: [
+    ['Genesis', 50], ['Exodus', 40], ['Leviticus', 27], ['Numbers', 36], ['Deuteronomy', 34],
+    ['Joshua', 24], ['Judges', 21], ['Ruth', 4], ['1 Samuel', 31], ['2 Samuel', 24],
+    ['1 Kings', 22], ['2 Kings', 25], ['1 Chronicles', 29], ['2 Chronicles', 36],
+    ['Ezra', 10], ['Nehemiah', 13], ['Esther', 10], ['Job', 42], ['Psalms', 150],
+    ['Proverbs', 31], ['Ecclesiastes', 12], ['Song of Solomon', 8], ['Isaiah', 66],
+    ['Jeremiah', 52], ['Lamentations', 5], ['Ezekiel', 48], ['Daniel', 12], ['Hosea', 14],
+    ['Joel', 3], ['Amos', 9], ['Obadiah', 1], ['Jonah', 4], ['Micah', 7], ['Nahum', 3],
+    ['Habakkuk', 3], ['Zephaniah', 3], ['Haggai', 2], ['Zechariah', 14], ['Malachi', 4],
+  ]},
+  { id: 'NT', name: 'New Testament', books: [
+    ['Matthew', 28], ['Mark', 16], ['Luke', 24], ['John', 21], ['Acts', 28], ['Romans', 16],
+    ['1 Corinthians', 16], ['2 Corinthians', 13], ['Galatians', 6], ['Ephesians', 6],
+    ['Philippians', 4], ['Colossians', 4], ['1 Thessalonians', 5], ['2 Thessalonians', 3],
+    ['1 Timothy', 6], ['2 Timothy', 4], ['Titus', 3], ['Philemon', 1], ['Hebrews', 13],
+    ['James', 5], ['1 Peter', 5], ['2 Peter', 3], ['1 John', 5], ['2 John', 1], ['3 John', 1],
+    ['Jude', 1], ['Revelation', 22],
+  ]},
+];
+
+
+/* =====================================================================
+   2. LAYOUT
+   Pure functions: data in, rectangles out. No DOM.
+
+   The world is a fixed rectangle, independent of the screen, so every
+   chapter has one permanent position.
+
+   - Testaments are stacked top to bottom, height ∝ chapter count, so a
+     chapter has the same area everywhere in the Bible.
+   - Books are placed by recursive ordered binary partition (a Mondrian-
+     like subdivision): every cut preserves canonical order, reading
+     left→right and top→bottom at each level.
+   - Each book is divided into rows of equal-area chapter cells, again in
+     reading order.
+   ===================================================================== */
+
+const WORLD = { x: 0, y: 0, width: 1600, height: 1000, gutter: 30 };
+
+// Split n chapters into r rows whose counts differ by at most one.
+function rowCounts(n, r) {
+  const base = Math.floor(n / r), extra = n % r;
+  return Array.from({ length: r }, (_, i) => base + (i >= r - extra ? 1 : 0));
+}
+
+// How far from square the chapter cells of an n-chapter book in a w×h
+// region would be, if split into r rows. Sum over chapters of log-aspect²,
+// plus a term for the single worst cell so small books don't become slivers.
+function gridCost(n, w, h, r) {
+  let sum = 0, worst = 0;
+  for (const c of rowCounts(n, r)) {
+    const e = Math.log((w / c) / (h * c / n)) ** 2;
+    sum += c * e;
+    worst = Math.max(worst, e);
+  }
+  return sum + 2 * worst;
+}
+
+function bestGrid(n, w, h) {
+  let best = { rows: 1, cost: Infinity };
+  for (let r = 1; r <= n; r++) {
+    const cost = gridCost(n, w, h, r);
+    if (cost < best.cost) best = { rows: r, cost };
+  }
+  return best;
+}
+
+// Cut a rectangle across its longer side; fraction f goes first
+// (left or top), so reading order is always left→right, top→bottom.
+function cut(r, f) {
+  return r.width >= r.height
+    ? [{ x: r.x, y: r.y, width: r.width * f, height: r.height },
+       { x: r.x + r.width * f, y: r.y, width: r.width * (1 - f), height: r.height }]
+    : [{ x: r.x, y: r.y, width: r.width, height: r.height * f },
+       { x: r.x, y: r.y + r.height * f, width: r.width, height: r.height * (1 - f) }];
+}
+
+// Recursive ordered binary partition. The ordered list of books is split
+// in two near the middle of its chapter weight; each half takes its share
+// of the rectangle. Of the few most balanced split points, keep the one
+// whose finished subtree gives the most square chapter cells.
+const SPLIT_CANDIDATES = 3;
+const chapterSum = (books) => books.reduce((s, b) => s + b.n, 0);
+
+function partitionBooks(books, rect) {
+  if (books.length === 1) {
+    return { cost: bestGrid(books[0].n, rect.width, rect.height).cost, regions: [{ ...books[0], rect }] };
+  }
+  const total = chapterSum(books);
+  const splits = [];
+  for (let k = 1, acc = 0; k < books.length; k++) {
+    acc += books[k - 1].n;
+    splits.push({ k, imbalance: Math.abs(acc - total / 2) });
+  }
+  splits.sort((a, b) => a.imbalance - b.imbalance || a.k - b.k);
+
+  let best = null;
+  for (const { k } of splits.slice(0, SPLIT_CANDIDATES)) {
+    const first = books.slice(0, k), rest = books.slice(k);
+    const [ra, rb] = cut(rect, chapterSum(first) / total);
+    const a = partitionBooks(first, ra), b = partitionBooks(rest, rb);
+    if (!best || a.cost + b.cost < best.cost) {
+      best = { cost: a.cost + b.cost, regions: [...a.regions, ...b.regions] };
+    }
+  }
+  return best;
+}
+
+// Divide a book's rectangle into chapter cells, in reading order.
+function layoutChapters(n, x, y, w, h) {
+  const cells = [];
+  let cy = y;
+  for (const c of rowCounts(n, bestGrid(n, w, h).rows)) {
+    const rh = h * c / n;
+    for (let i = 0; i < c; i++) cells.push({ x: x + w * i / c, y: cy, width: w / c, height: rh });
+    cy += rh;
+  }
+  return cells;
+}
+
+function layoutBible(bible, world) {
+  const total = bible.reduce((s, t) => s + t.books.reduce((a, b) => a + b[1], 0), 0);
+  const usableH = world.height - world.gutter * (bible.length - 1);
+  const testaments = [], books = [], chapters = [];
+  let ty = world.y;
+
+  bible.forEach((t) => {
+    const items = t.books.map(([name, n]) => ({ name, n }));
+    const tRect = { x: world.x, y: ty, width: world.width, height: usableH * chapterSum(items) / total };
+    const testament = { id: t.id, name: t.name, ...tRect, books: [] };
+    testaments.push(testament);
+
+    for (const { name, n, rect } of partitionBooks(items, tRect).regions) {
+      const book = {
+        index: books.length, testament: t.name, testamentId: t.id, name, chapterCount: n,
+        ...rect, chapters: [],
+      };
+      layoutChapters(n, rect.x, rect.y, rect.width, rect.height).forEach((cell, i) => {
+        const chapter = {
+          index: chapters.length, testament: t.name, testamentId: t.id,
+          book: name, bookIndex: book.index, chapter: i + 1,
+          ...cell, centerX: cell.x + cell.width / 2, centerY: cell.y + cell.height / 2,
+        };
+        book.chapters.push(chapter);
+        chapters.push(chapter);
+      });
+      testament.books.push(book);
+      books.push(book);
+    }
+    ty += tRect.height + world.gutter;
+  });
+
+  return { world, testaments, books, chapters };
+}
+
+
+/* =====================================================================
+   3. GEOMETRY / MODEL
+   The complete, renderer-agnostic world. Each chapter looks like:
+   { testament, book, chapter, x, y, width, height, centerX, centerY, ... }
+   ===================================================================== */
+
+const MODEL = layoutBible(BIBLE, WORLD);
+
+console.assert(MODEL.testaments.length === 2, 'expected 2 testaments');
+console.assert(MODEL.books.length === 66, 'expected 66 books');
+console.assert(MODEL.chapters.length === 1189, 'expected 1,189 chapters');
+console.assert(MODEL.testaments[0].books.reduce((s, b) => s + b.chapterCount, 0) === 929, 'OT should have 929 chapters');
+console.assert(MODEL.testaments[1].books.reduce((s, b) => s + b.chapterCount, 0) === 260, 'NT should have 260 chapters');
+
+// Pointer → chapter lookup, in world coordinates.
+function chapterAt(x, y) {
+  for (const b of MODEL.books) {
+    if (x < b.x || x >= b.x + b.width || y < b.y || y >= b.y + b.height) continue;
+    for (const c of b.chapters) {
+      if (x >= c.x && x < c.x + c.width && y >= c.y && y < c.y + c.height) return c;
+    }
+  }
+  return null;
+}
+
+
+/* =====================================================================
+   4. VIEWPORT / CAMERA
+   The camera is the only thing that moves. screen = world·k + offset,
+   with the world point (cx, cy) at the centre of the screen.
+   ===================================================================== */
+
+const camera = { cx: WORLD.width / 2, cy: WORLD.height / 2, k: 1 };
+const viewport = { w: innerWidth, h: innerHeight };
+
+const toScreenX = (x) => (x - camera.cx) * camera.k + viewport.w / 2;
+const toScreenY = (y) => (y - camera.cy) * camera.k + viewport.h / 2;
+const toWorldX  = (sx) => (sx - viewport.w / 2) / camera.k + camera.cx;
+const toWorldY  = (sy) => (sy - viewport.h / 2) / camera.k + camera.cy;
+
+// Camera that frames a world rectangle; `fill` caps how much of the
+// screen it may occupy so tiny books keep some surrounding world.
+function frame(rect, { pad = 64, fill = 1 } = {}) {
+  const availW = Math.max(1, viewport.w - pad * 2), availH = Math.max(1, viewport.h - pad * 2);
+  const k = Math.min(availW / rect.width, availH / rect.height,
+                     (viewport.w * fill) / rect.width, (viewport.h * fill) / rect.height);
+  return { cx: rect.x + rect.width / 2, cy: rect.y + rect.height / 2, k };
+}
+
+let flight = null;
+function flyTo(target, duration = 850) {
+  const from = { ...camera }, t0 = performance.now();
+  const ease = (t) => (t < .5 ? 4 * t * t * t : 1 - (-2 * t + 2) ** 3 / 2);
+  cancelAnimationFrame(flight);
+  const step = (now) => {
+    const t = Math.min(1, (now - t0) / duration), e = ease(t);
+    camera.k  = from.k * (target.k / from.k) ** e;       // zoom geometrically
+    camera.cx = from.cx + (target.cx - from.cx) * e;
+    camera.cy = from.cy + (target.cy - from.cy) * e;
+    renderCamera();
+    if (t < 1) flight = requestAnimationFrame(step);
+    else refreshHover();                                // the world moved under the pointer
+  };
+  flight = requestAnimationFrame(step);
+}
+
+
+/* =====================================================================
+   5. RENDERING
+   Static world geometry is drawn once; the camera is a single transform.
+   Labels and stars live in screen space so they stay crisp and legible.
+   ===================================================================== */
+
+const $ = (id) => document.getElementById(id);
+const SVG_NS = 'http://www.w3.org/2000/svg';
+const rectPath = (r) => `M${r.x} ${r.y}h${r.width}v${r.height}h${-r.width}z`;
+const setRect = (el, r) => {
+  el.setAttribute('x', r.x); el.setAttribute('y', r.y);
+  el.setAttribute('width', r.width); el.setAttribute('height', r.height);
+};
+const svgEl = (tag, attrs = {}, parent) => {
+  const el = document.createElementNS(SVG_NS, tag);
+  for (const k in attrs) el.setAttribute(k, attrs[k]);
+  if (parent) parent.appendChild(el);
+  return el;
+};
+
+function drawWorld(model) {
+  $('chapter-lines').setAttribute('d', model.chapters.map(rectPath).join(''));
+  $('book-lines').setAttribute('d', model.books.map(rectPath).join(''));
+  $('testament-lines').setAttribute('d', model.testaments.map(rectPath).join(''));
+  // Zero-length round-capped segments: every star is a screen-sized dot.
+  $('stars').setAttribute('d', model.chapters.map((c) => `M${c.centerX} ${c.centerY}h.001`).join(''));
+}
+
+// Label measurement (for "only where space permits").
+const measureCtx = document.createElement('canvas').getContext('2d');
+function measure(text, px, spacingEm) {
+  measureCtx.font = `400 ${px}px ${getComputedStyle(document.body).fontFamily}`;
+  return measureCtx.measureText(text).width + text.length * px * spacingEm;
+}
+
+const labels = { testaments: [], books: [], chapters: [] };
+
+function createLabels(model) {
+  model.testaments.forEach((t) => {
+    labels.testaments.push({ t, el: svgEl('text', { class: 'testament-label' }, $('testament-labels')) });
+    labels.testaments.at(-1).el.textContent = t.name.toUpperCase();
+  });
+  model.books.forEach((b) => {
+    // A label sits on the book's top boundary, on a patch of background.
+    const g = svgEl('g', {}, $('book-labels'));
+    const bg = svgEl('rect', { class: 'label-bg', y: -6, height: 12 }, g);
+    const el = svgEl('text', { class: 'book-label', x: 4 }, g);
+    el.textContent = b.name.toUpperCase();
+    labels.books.push({ b, g, bg, el, width: 0 });
+  });
+  measureLabels();
+}
+function measureLabels() {
+  labels.books.forEach((l) => {
+    l.width = measure(l.el.textContent, 9, .14);
+    l.bg.setAttribute('width', l.width + 6);
+  });
+}
+
+// Chapter numbers exist only for the focused book.
+function showChapterNumbers(book) {
+  const g = $('chapter-nums');
+  g.replaceChildren();
+  labels.chapters = [];
+  if (!book) return;
+  for (const c of book.chapters) {
+    const el = svgEl('text', { class: 'chapter-num' }, g);
+    el.textContent = c.chapter;
+    labels.chapters.push({ c, el });
+  }
+  requestAnimationFrame(() => labels.chapters.forEach((l) => l.el.classList.add('on')));
+  syncSelectionClasses();
+}
+
+// Everything that depends on the camera. Called every animation frame.
+function renderCamera() {
+  const k = camera.k;
+  $('world').setAttribute('transform',
+    `translate(${viewport.w / 2 - camera.cx * k} ${viewport.h / 2 - camera.cy * k}) scale(${k})`);
+
+  // Stars grow a little as you approach, but stay stars.
+  const overviewK = frame(WORLD).k;
+  $('stars').style.strokeWidth = Math.min(7, 3 * (k / overviewK) ** .28);
+
+  for (const { t, el } of labels.testaments) {
+    const x = toScreenX(t.x) - 22, y = toScreenY(t.y + t.height / 2);
+    el.setAttribute('transform', `translate(${x} ${y}) rotate(-90)`);
+  }
+
+  for (const l of labels.books) {
+    const { b, g } = l;
+    const fits = l.width + 20 <= b.width * k && b.height * k >= 22;
+    g.setAttribute('visibility', fits ? 'visible' : 'hidden');
+    if (fits) g.setAttribute('transform', `translate(${toScreenX(b.x) + 5} ${toScreenY(b.y)})`);
+  }
+
+  for (const { c, el } of labels.chapters) {
+    const fits = c.width * k >= 24 && c.height * k >= 24;
+    el.setAttribute('visibility', fits ? 'visible' : 'hidden');
+    const inset = Math.min(8, c.width * k * .12);
+    el.setAttribute('x', toScreenX(c.x) + inset);
+    el.setAttribute('y', toScreenY(c.y) + inset + 9);
+  }
+
+  placeStar($('hover-star'), state.hover);
+  placeStar($('hover-halo'), state.hover);
+  placeStar($('sel-ring'), state.selected);
+  const dot = parseFloat($('stars').style.strokeWidth) / 2;
+  $('hover-star').setAttribute('r', dot + 1.2);
+  $('hover-halo').setAttribute('r', dot + 7);
+  $('sel-ring').setAttribute('r', dot + 6);
+}
+
+function placeStar(el, c) {
+  el.setAttribute('visibility', c ? 'visible' : 'hidden');
+  if (c) { el.setAttribute('cx', toScreenX(c.centerX)); el.setAttribute('cy', toScreenY(c.centerY)); }
+}
+
+// Everything that depends on hover / selection / focus state.
+function renderState() {
+  const hb = state.hover ? MODEL.books[state.hover.bookIndex] : null;
+  $('hover-book-fill').classList.toggle('on', !!hb);
+  $('hover-book-line').classList.toggle('on', !!hb);
+  if (hb) { setRect($('hover-book-fill'), hb); setRect($('hover-book-line'), hb); }
+  $('hover-chapter').classList.toggle('on', !!state.hover);
+  if (state.hover) setRect($('hover-chapter'), state.hover);
+
+  const s = state.selected;
+  $('sel-chapter').setAttribute('visibility', s ? 'visible' : 'hidden');
+  $('sel-book').setAttribute('visibility', s ? 'visible' : 'hidden');
+  if (s) { setRect($('sel-chapter'), s); setRect($('sel-book'), MODEL.books[s.bookIndex]); }
+
+  labels.books.forEach(({ b, el }) => {
+    el.classList.toggle('hover', hb === b);
+    el.classList.toggle('selected', !!s && s.bookIndex === b.index);
+  });
+  labels.testaments.forEach(({ t, el }) => el.classList.toggle('selected', !!s && s.testamentId === t.id));
+  syncSelectionClasses();
+
+  // Focus veil: dim the world outside what we are looking at.
+  const f = focusRect();
+  $('focus-veil').classList.toggle('on', !!f);
+  if (f) $('focus-veil').setAttribute('d', `M-1e5 -1e5H1e5V1e5H-1e5z${rectPath(f)}`);
+
+  $('hint').classList.toggle('away', state.focus.level !== 'bible');
+
+  $('info').innerHTML = s
+    ? `<div>${s.testament}</div><div>${s.book}</div><div>Chapter ${s.chapter}</div>` : '';
+
+  const crumbs = [['The Bible', () => focusBible()]];
+  if (state.focus.book) crumbs.push([state.focus.book.name, () => focusBook(state.focus.book)]);
+  if (state.focus.chapter) crumbs.push([String(state.focus.chapter.chapter), () => {}]);
+  const nav = $('crumbs');
+  nav.replaceChildren();
+  crumbs.forEach(([text, go], i) => {
+    if (i) nav.appendChild(Object.assign(document.createElement('i'), { textContent: '/' }));
+    const span = Object.assign(document.createElement('span'), { textContent: text });
+    if (i === crumbs.length - 1) span.className = 'current';
+    else span.onclick = (e) => { e.stopPropagation(); go(); };
+    nav.appendChild(span);
+  });
+
+  renderCamera();
+}
+
+function syncSelectionClasses() {
+  labels.chapters.forEach(({ c, el }) => el.classList.toggle('selected', c === state.selected));
+}
+
+
+/* =====================================================================
+   6. INTERACTION
+   Hover reveals, click selects, a second click enters. Interaction only
+   ever moves the camera; the world never changes.
+   ===================================================================== */
+
+const state = {
+  hover: null,                                     // chapter under the pointer
+  selected: null,                                  // selected chapter
+  focus: { level: 'bible', book: null, chapter: null },
+};
+
+function focusRect() {
+  if (state.focus.level === 'chapter') return state.focus.chapter;
+  if (state.focus.level === 'book') return state.focus.book;
+  return null;
+}
+
+function cameraForFocus() {
+  if (state.focus.level === 'chapter') return frame(state.focus.chapter, { pad: 96, fill: .42 });
+  if (state.focus.level === 'book') return frame(state.focus.book, { pad: 88, fill: .72 });
+  return frame(WORLD, { pad: 64 });
+}
+
+function setFocus(level, book = null, chapter = null) {
+  const bookChanged = state.focus.book !== book;
+  state.focus = { level, book, chapter };
+  if (bookChanged) showChapterNumbers(book);
+  renderState();
+  flyTo(cameraForFocus());
+}
+const focusBible   = () => setFocus('bible');
+const focusBook    = (b) => setFocus('book', b);
+const focusChapter = (c) => setFocus('chapter', MODEL.books[c.bookIndex], c);
+
+function select(c) { state.selected = c; renderState(); }
+
+const tooltip = $('tooltip');
+function showTooltip(c, sx, sy) {
+  tooltip.classList.toggle('on', !!c);
+  if (!c) return;
+  tooltip.querySelector('.b').textContent = c.book;
+  tooltip.querySelector('.c').textContent = `Chapter ${c.chapter}`;
+  const w = tooltip.offsetWidth, h = tooltip.offsetHeight;
+  const x = sx + 18 + w > viewport.w ? sx - 18 - w : sx + 18;
+  const y = sy + 18 + h > viewport.h ? sy - 18 - h : sy + 18;
+  tooltip.style.transform = `translate(${x}px, ${y}px)`;
+}
+
+const svg = $('map');
+
+const pointer = { x: 0, y: 0, inside: false };
+
+// The chapter under a screen point. While focused, the veiled world
+// outside the focus counts as background.
+function hitTest(sx, sy) {
+  const c = chapterAt(toWorldX(sx), toWorldY(sy));
+  const f = state.focus;
+  if (f.level === 'chapter') return c === f.chapter ? c : null;
+  if (f.level === 'book') return c && c.bookIndex === f.book.index ? c : null;
+  return c;
+}
+
+// Step back out one level: chapter → book → Bible → no selection.
+function stepOut() {
+  const f = state.focus;
+  if (f.level === 'chapter') focusBook(f.book);
+  else if (f.level === 'book') focusBible();
+  else select(null);
+}
+
+function refreshHover() {
+  const c = pointer.inside ? hitTest(pointer.x, pointer.y) : null;
+  svg.classList.toggle('over-chapter', !!c);
+  showTooltip(c, pointer.x, pointer.y);
+  if (c !== state.hover) { state.hover = c; renderState(); }
+}
+
+svg.addEventListener('pointermove', (e) => {
+  Object.assign(pointer, { x: e.clientX, y: e.clientY, inside: true });
+  refreshHover();
+});
+
+svg.addEventListener('pointerleave', () => { pointer.inside = false; refreshHover(); });
+
+svg.addEventListener('click', (e) => {
+  const c = hitTest(e.clientX, e.clientY);
+  const f = state.focus;
+
+  if (!c) { stepOut(); return; }                     // background or veil
+  if (c !== state.selected) { select(c); return; }   // first click selects
+
+  // Second click on the selected chapter enters one level deeper.
+  if (!f.book) focusBook(MODEL.books[c.bookIndex]);
+  else if (f.chapter !== c) focusChapter(c);
+});
+
+addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') stepOut();
+});
+
+addEventListener('resize', () => {
+  viewport.w = innerWidth; viewport.h = innerHeight;
+  cancelAnimationFrame(flight);
+  Object.assign(camera, cameraForFocus());
+  renderCamera();
+});
+
+
+/* =====================================================================
+   START
+   ===================================================================== */
+
+drawWorld(MODEL);
+createLabels(MODEL);
+Object.assign(camera, cameraForFocus());
+renderState();
+document.fonts?.ready.then(() => { measureLabels(); renderCamera(); });
+</script>
+</body>
+</html>
