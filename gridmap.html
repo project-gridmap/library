@@ -101,7 +101,6 @@
   #tooltip.on { opacity: 1; }
   #tooltip .d { color: var(--ink-2); }
   #tooltip .b { color: var(--c, var(--ink)); }
-  #tooltip .c { color: var(--ink-2); }
 </style>
 </head>
 <body>
@@ -134,7 +133,7 @@
 <nav id="crumbs" class="chrome"></nav>
 <div id="info" class="chrome"></div>
 <div id="hint" class="chrome">click to select &middot; again to enter &middot; esc to return</div>
-<div id="tooltip"><div class="d"></div><div class="b"></div><div class="c"></div></div>
+<div id="tooltip"><div class="d"></div><div class="b"></div></div>
 
 <script>
 'use strict';
@@ -618,7 +617,8 @@ function createLabels(model) {
     tint(g, b);
     const bg = svgEl('rect', { class: 'label-bg', y: -6, height: 12 }, g);
     const el = svgEl('text', { class: 'book-label', x: 4 }, g);
-    el.textContent = (CONFIG.bookLabels === 'short' ? b.key : b.name).toUpperCase();
+    // Canonical book number first: 1.GEN, 2.EXO … 66.REV
+    el.textContent = `${b.index + 1}.${CONFIG.bookLabels === 'short' ? b.key : b.name}`.toUpperCase();
     labels.books.push({ b, g, bg, el, width: 0 });
   });
   measureLabels();
@@ -814,13 +814,15 @@ const focusChapter  = (c) => {
 function select(c) { state.selected = c; renderState(); }
 
 const tooltip = $('tooltip');
+
+// "Genesis 12"; a single psalm is conventionally "Psalm 23".
+const chapterRef = (c) => `${c.book === 'Psalms' ? 'Psalm' : c.book} ${c.chapter}`;
 function showTooltip(c, sx, sy) {
   tooltip.classList.toggle('on', !!c);
   if (!c) return;
   tooltip.querySelector('.d').textContent = c.division;
-  tooltip.querySelector('.b').textContent = c.book;
+  tooltip.querySelector('.b').textContent = chapterRef(c);
   tint(tooltip, MODEL.books[c.bookIndex]);
-  tooltip.querySelector('.c').textContent = `Chapter ${c.chapter}`;
   const w = tooltip.offsetWidth, h = tooltip.offsetHeight;
   const x = sx + 18 + w > viewport.w ? sx - 18 - w : sx + 18;
   const y = sy + 18 + h > viewport.h ? sy - 18 - h : sy + 18;
