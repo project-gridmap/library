@@ -1131,9 +1131,9 @@ function useLayout(name) {
 /* =====================================================================
    6. INTERACTION
    Mouse: hover reveals, click selects, a second click enters; drag pans
-   and the wheel zooms. Touch: pinch and drag move freely; a tap zooms in
-   one level until chapters are big enough to hit, then selects and
-   enters; press-and-hold scrubs across chapters. Back steps out. None of
+   and the wheel zooms. Touch: pinch and drag move freely; a tap selects
+   (showing its label above the finger), a second tap enters;
+   press-and-hold scrubs across chapters. Back steps out. None of
    it changes the world: only the camera moves.
    ===================================================================== */
 
@@ -1254,9 +1254,23 @@ function stepOut() {
   else select(null);
 }
 
-// A finger needs a target about this big (CSS px) to hit reliably.
-const MIN_TAP = 30;
 let hintDismissed = false;
+
+// A touch selection briefly shows its label above the finger: the finger
+// covers the (often small) chapter it just picked.
+const TAP_LABEL_MS = 1400;
+let tapLabelTimer = null;
+function flashTapLabel(c, sx, sy) {
+  clearTimeout(tapLabelTimer);
+  showTooltip(c, sx, sy, { aboveFinger: true });
+  tapLabelTimer = setTimeout(() => showTooltip(null), TAP_LABEL_MS);
+}
+function clearTapLabel() {
+  if (!tapLabelTimer) return;
+  clearTimeout(tapLabelTimer);
+  tapLabelTimer = null;
+  showTooltip(null);
+}
 
 function tapAt(sx, sy, pointerType) {
   if (pointerType !== 'mouse' && !hintDismissed) hintDismissed = true;
@@ -1264,13 +1278,12 @@ function tapAt(sx, sy, pointerType) {
   const f = state.focus;
   if (!c) { stepOut(); return; }                     // background or veil
 
-  // Touch: while chapters are too small to hit, a tap zooms in one level
-  // toward what was tapped (division, then book) instead of selecting.
-  if (pointerType !== 'mouse' && Math.min(c.width, c.height) * camera.k < MIN_TAP) {
-    if (f.level === 'bible') { focusDivision(divisionOf(MODEL.books[c.bookIndex])); return; }
-    if (f.level === 'division') { focusBook(MODEL.books[c.bookIndex]); return; }
+  // First tap selects, at any zoom: one tap from the whole Bible to a chapter.
+  if (c !== state.selected) {
+    select(c);
+    if (pointerType !== 'mouse') flashTapLabel(c, sx, sy);
+    return;
   }
-  if (c !== state.selected) { select(c); return; }   // first tap selects
 
   // Second tap on the selected chapter enters one level deeper.
   if (!f.book) focusBook(MODEL.books[c.bookIndex]);  // from the Bible or a division
@@ -1335,6 +1348,7 @@ function endScrub(commit) {
 svg.addEventListener('pointerdown', (e) => {
   if (e.pointerType === 'mouse' && e.button !== 0) return;
   touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
+  if (e.pointerType !== 'mouse') clearTapLabel();
   try { svg.setPointerCapture(e.pointerId); } catch { /* pointer already gone: track it anyway */ }
   if (touches.size === 1) {
     gesture = { kind: 'press', x0: e.clientX, y0: e.clientY, type: e.pointerType };
@@ -1628,7 +1642,7 @@ async function start() {
   $('stars').style.strokeOpacity = CONFIG.markOpacity;
   $('numbers').style.fillOpacity = CONFIG.markOpacity;
   $('hint').textContent = COARSE
-    ? 'tap to explore · pinch to zoom · hold to scan'
+    ? 'tap to select · pinch to zoom · hold to scan'
     : 'click to select · again to enter · scroll to zoom · esc to return';
   measureSafeArea();
   $('numbers').style.display = 'none';            // stars first; numbers join when legible
