@@ -201,6 +201,8 @@ export class Gridmap {
     this.medianValue = median(values);
     const sortedValues = values.filter((value) => Number.isFinite(value)).sort((a, b) => a - b);
     this.referenceValue = sortedValues[Math.floor(Math.max(0, sortedValues.length - 1) * 0.99)] ?? this.medianValue;
+    const sizes = this.model.cells.map((cell) => this.numberWorldSize(cell)).sort((a, b) => a - b);
+    this.medianNumberSize = sizes[sizes.length >> 1] || this.model.cellSide;
   }
 
   viewport() {
@@ -564,7 +566,15 @@ export class Gridmap {
 
     const selected = this.state.selected;
     if (selected) {
+      const item = this.model.items[selected.itemIndex];
       const colour = this.colourOf(selected, theme.text);
+      ctx.strokeStyle = colour;
+      ctx.globalAlpha = 1;
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      rect(item);
+      ctx.stroke();
+
       ctx.strokeStyle = colour;
       ctx.fillStyle = colour;
       ctx.globalAlpha = 0.1;
@@ -598,32 +608,93 @@ export class Gridmap {
     this.renderLabels(X, Y);
   }
 
+  markScale(cell, floor = 0.4) {
+    return this.options.relativeMarkSize && cell.value
+      ? Math.max(floor, Math.sqrt(cell.value / this.medianValue))
+      : 1;
+  }
+
+  numberWorldSize(cell) {
+    const digits = String(cell.label).length;
+    const share = this.options.relativeMarkSize && cell.value
+      ? Math.min(1, Math.max(0.35, Math.sqrt(cell.value / this.referenceValue)))
+      : 0.7;
+    return Math.min(
+      Math.min(cell.width, cell.height) * this.options.markMaxSize * share,
+      cell.width * 0.7 / (digits * 0.6),
+    );
+  }
+
+  useNumbers() {
+    return this.options.markType === 'number' && this.medianNumberSize * this.camera.k >= this.options.numberMinPx;
+  }
+
   renderMarks(ctx, X, Y, onScreen) {
     const theme = this.options.theme;
-    const useNumbers = this.options.markType === 'number' && this.model.cellSide * this.camera.k >= this.options.numberMinPx;
+    const useNumbers = this.useNumbers();
+    const worldK = this.frame(this.model.world).k;
+    const dot = Math.min(7, 3 * (this.camera.k / worldK) ** 0.28);
+    const damping = useNumbers
+      ? Math.min(1, 24 / (this.medianNumberSize * this.camera.k))
+      : 1;
+
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     for (const item of this.model.items) {
       ctx.fillStyle = this.colourOf(item, theme.text);
       for (const cell of item.cells) {
         if (!onScreen(cell)) continue;
-        const scale = this.options.relativeMarkSize && cell.value
-          ? Math.max(0.35, Math.sqrt(cell.value / this.referenceValue))
-          : 0.7;
-        const size = Math.min(cell.width, cell.height) * this.options.markMaxSize * scale * this.camera.k;
-        ctx.globalAlpha = cell === this.state.hover || cell === this.state.selected ? 1 : this.options.markOpacity;
+        const strong = cell === this.state.hover || cell === this.state.selected;
+        ctx.globalAlpha = strong ? 1 : this.options.markOpacity;
         if (useNumbers) {
-          ctx.font = `${cell === this.state.hover || cell === this.state.selected ? 500 : 400} ${Math.max(2, Math.min(24, size))}px ${theme.font}`;
+          const size = this.numberWorldSize(cell) * this.camera.k * damping;
+          if (size < 2) continue;
+          ctx.font = `${strong ? 500 : 400} ${Math.max(2, Math.min(24, size))}px ${theme.font}`;
           ctx.fillText(cell.label, X(cell.centerX), Y(cell.centerY));
         } else {
-          const radius = Math.min(4, Math.max(1.2, size / 8));
+          const radius = dot * this.markScale(cell) / 2;
           ctx.beginPath();
           ctx.arc(X(cell.centerX), Y(cell.centerY), radius, 0, Math.PI * 2);
           ctx.fill();
         }
       }
     }
+
+    this.renderMarkEmphasis(ctx, X, Y, useNumbers, dot, damping);
     ctx.globalAlpha = 1;
+  }
+
+  renderMarkEmphasis(ctx, X, Y, useNumbers, dot, damping) {
+    const hover = this.state.hover;
+    const selected = this.state.selected;
+
+    if (!useNumbers && hover) {
+      const colour = this.colourOf(hover, this.options.theme.text);
+      const radius = dot * this.markScale(hover) / 2;
+      ctx.fillStyle = colour;
+      ctx.strokeStyle = colour;
+      ctx.globalAlpha = 1;
+      ctx.beginPath();
+      ctx.arc(X(hover.centerX), Y(hover.centerY), radius + 1.2, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.globalAlpha = 0.35;
+      ctx.beginPath();
+      ctx.arc(X(hover.centerX), Y(hover.centerY), radius + 7, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+
+    if (selected) {
+      const colour = this.colourOf(selected, this.options.theme.text);
+      const numberSize = this.numberWorldSize(selected) * this.camera.k * damping;
+      const numberRadius = Math.max(numberSize * 0.55, String(selected.label).length * 0.6 * numberSize / 2);
+      const starRadius = dot * this.markScale(selected) / 2;
+      ctx.strokeStyle = colour;
+      ctx.globalAlpha = 1;
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.arc(X(selected.centerX), Y(selected.centerY), useNumbers ? numberRadius + 5 : starRadius + 6, 0, Math.PI * 2);
+      ctx.stroke();
+    }
   }
 
   renderVeil(ctx, rect) {
@@ -642,27 +713,55 @@ export class Gridmap {
   renderLabels(X, Y) {
     const labelItem = this.options.labels.item;
     const selected = this.state.selected;
+    const hover = this.state.hover;
     this.overlay.replaceChildren();
+
+    for (const layer of this.model.layers) {
+      const h = layer.height * this.camera.k;
+      const text = layer.label.toUpperCase();
+      if (h < text.length * 7.5) continue;
+      const el = createElement('div', { text: label }, this.overlay);
+      Object.assign(el.style, {
+        position: 'absolute',
+        left: `${X(layer.x) - 22}px`,
+        top: `${Y(layer.y + layer.height / 2)}px`,
+        transform: 'translate(-50%, -50%) rotate(-90deg)',
+        transformOrigin: 'center',
+        color: selected?.layerIndex === layer.index ? this.options.theme.text : this.options.theme.mutedText,
+        fontSize: '9.5px',
+        letterSpacing: '0.32em',
+        whiteSpace: 'nowrap',
+      });
+    }
+
     for (const item of this.model.items) {
       const w = item.width * this.camera.k;
       const h = item.height * this.camera.k;
-      if (w < 28 || h < 14) continue;
-      const text = typeof labelItem === 'function'
+      if (h < 22) continue;
+      const full = typeof labelItem === 'function'
         ? labelItem(item, this)
         : this.options.itemLabels === 'full' ? item.label : item.shortLabel;
+      const text = `${item.index + 1}.${full}`.toUpperCase();
+      const number = String(item.index + 1);
+      const label = text.length * 7.3 + 20 <= w ? text : number.length * 7.3 + 14 <= w ? number : null;
+      if (!label) continue;
+
       const el = createElement('div', { text }, this.overlay);
       Object.assign(el.style, {
         position: 'absolute',
         left: `${X(item.x) + 5}px`,
         top: `${Y(item.y) - 6}px`,
-        maxWidth: `${Math.max(20, w - 10)}px`,
+        maxWidth: `${Math.max(20, w - 8)}px`,
         overflow: 'hidden',
         whiteSpace: 'nowrap',
         textOverflow: 'clip',
         color: this.colourOf(item, this.options.theme.mutedText),
         background: this.options.theme.background,
         padding: '0 4px',
-        opacity: selected?.itemIndex === item.index ? '1' : '0.78',
+        fontSize: '9px',
+        letterSpacing: '0.14em',
+        lineHeight: '1.33',
+        opacity: selected?.itemIndex === item.index || hover?.itemIndex === item.index ? '1' : '0.72',
       });
     }
   }
