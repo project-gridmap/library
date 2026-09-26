@@ -1,0 +1,32 @@
+{
+  "name": "@project-gridmap/core",
+  "version": "0.1.0",
+  "description": "A content-agnostic hierarchical grid map renderer.",
+  "type": "module",
+  "main": "./src/index.js",
+  "module": "./src/index.js",
+  "types": "./src/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./src/index.d.ts",
+      "import": "./src/index.js"
+    }
+  },
+  "files": [
+    "src",
+    "README.md",
+    "LICENSE"
+  ],
+  "sideEffects": false,
+  "scripts": {
+    "test": "node --test",
+    "typecheck": "node --check src/index.js && node --check src/model.js && node --check src/gridmap.js"
+  },
+  "keywords": [
+    "gridmap",
+    "treemap",
+    "visualization",
+    "canvas"
+  ],
+  "license": "MIT"
+}
