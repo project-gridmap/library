@@ -720,7 +720,7 @@ export class Gridmap {
       const h = layer.height * this.camera.k;
       const text = layer.label.toUpperCase();
       if (h < text.length * 7.5) continue;
-      const el = createElement('div', { text: label }, this.overlay);
+      const el = createElement('div', { text }, this.overlay);
       Object.assign(el.style, {
         position: 'absolute',
         left: `${X(layer.x) - 22}px`,
@@ -746,7 +746,7 @@ export class Gridmap {
       const label = text.length * 7.3 + 20 <= w ? text : number.length * 7.3 + 14 <= w ? number : null;
       if (!label) continue;
 
-      const el = createElement('div', { text }, this.overlay);
+      const el = createElement('div', { text: label }, this.overlay);
       Object.assign(el.style, {
         position: 'absolute',
         left: `${X(item.x) + 5}px`,
