@@ -3,14 +3,10 @@
 Project Gridmap is a content-agnostic hierarchical grid map renderer. It knows
 about layers, groups, items, and cells. It does not know what those things mean.
 
-The current root `index.html` is still the standalone Bible demo for GitHub
-Pages. The importable package in `src/` is deliberately generic so it can power
-that demo, The Bible Game, and other ordered datasets.
-
 ## Install
 
 ```bash
-npm install @project-gridmap/core
+npm install @project-gridmap/library
 ```
 
 ## Usage
