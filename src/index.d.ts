@@ -127,6 +127,8 @@ export type GridmapTheme = {
   groupLine: string;
   layerLine: string;
   font: string;
+  /** 0–1: neon bloom on coloured borders, labels, hover and selection, in whatever colours are supplied. 0 turns it off. Default 0. */
+  glow: number;
 };
 
 export type GridmapLayerPainter = (args: {

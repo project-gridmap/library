@@ -3,15 +3,18 @@
 import { DEFAULT_WORLDS, buildGridmapModel, cellAt, normaliseGridmapData } from './model.js';
 
 const DEFAULT_THEME = {
-  background: '#0a0b0c',
-  text: '#f2efe8',
-  mutedText: '#a19d94',
-  faintText: '#5c5954',
-  cellLine: '#2a2c2e',
-  itemLine: '#7d7a74',
-  groupLine: '#aeaaa2',
-  layerLine: '#d9d5cd',
+  background: '#000000',
+  text: '#f7f7fa',
+  mutedText: '#a3a3ad',
+  faintText: '#5c5c66',
+  cellLine: '#1c1c22',
+  itemLine: '#94949a',
+  groupLine: '#94949a',
+  layerLine: '#94949a',
   font: 'ui-monospace, "SF Mono", Menlo, Consolas, monospace',
+  // 0–1: neon bloom on coloured borders, labels, hover and selection, in
+  // whatever colours are supplied. Off by default.
+  glow: 0,
 };
 
 const DEFAULT_OPTIONS = {
@@ -21,7 +24,7 @@ const DEFAULT_OPTIONS = {
   colourBy: 'item',
   showMarks: true,
   markType: 'number',
-  markOpacity: 0.5,
+  markOpacity: 0.75,
   relativeMarkSize: true,
   markMaxSize: 0.4,
   numberMinPx: 8,
@@ -51,6 +54,11 @@ function createElement(tag, attrs = {}, parent) {
   if (parent) parent.appendChild(el);
   return el;
 }
+
+// Neon on a coloured label: two soft shadows in its own colour.
+const labelGlow = (colour, glow) => (colour && glow > 0
+  ? `0 0 ${6 * glow}px ${colour}, 0 0 ${14 * glow}px ${colour}`
+  : 'none');
 
 const median = (values, fallback = 1) => {
   const sorted = values.filter((value) => Number.isFinite(value)).sort((a, b) => a - b);
@@ -289,6 +297,10 @@ export class Gridmap {
       : this.options.colourBy === 'cell' ? entity.id
       : entity.itemId ?? entity.id;
     return this.options.colours?.[key] ?? fallback;
+  }
+
+  glow() {
+    return Math.min(1, Math.max(0, Number(this.options.theme.glow) || 0));
   }
 
   toScreenX(x) {
@@ -634,9 +646,33 @@ export class Gridmap {
       ctx.globalAlpha = 1;
     }
 
+    // Neon: a soft wide stroke under each coloured border, one path per colour.
+    const glow = this.glow();
+    if (glow > 0) {
+      const blooms = new Map();
+      for (const item of visibleItems) {
+        const colour = this.colourOf(item, null);
+        if (!colour) continue;
+        if (!blooms.has(colour)) blooms.set(colour, []);
+        blooms.get(colour).push(item);
+      }
+      for (const [colour, items] of blooms) {
+        ctx.strokeStyle = colour;
+        ctx.beginPath();
+        items.forEach(rect);
+        ctx.globalAlpha = 0.09 * glow;
+        ctx.lineWidth = 6;
+        ctx.stroke();
+        ctx.globalAlpha = 0.2 * glow;
+        ctx.lineWidth = 2.5;
+        ctx.stroke();
+      }
+      ctx.lineWidth = 1;
+    }
+
+    ctx.globalAlpha = 1;
     for (const item of visibleItems) {
       ctx.strokeStyle = this.colourOf(item, theme.itemLine);
-      ctx.globalAlpha = 0.9;
       ctx.beginPath();
       rect(item);
       ctx.stroke();
@@ -661,27 +697,21 @@ export class Gridmap {
     ctx.stroke();
 
     const selected = this.state.selected;
+    // Selection is the cell alone, glowing; item borders never change.
     if (selected) {
-      const item = this.model.items[selected.itemIndex];
       const colour = this.colourOf(selected, theme.text);
       ctx.strokeStyle = colour;
-      ctx.globalAlpha = 1;
-      ctx.lineWidth = 1.5;
-      ctx.beginPath();
-      rect(item);
-      ctx.stroke();
-
-      ctx.strokeStyle = colour;
       ctx.fillStyle = colour;
-      ctx.globalAlpha = 0.1;
+      ctx.globalAlpha = 0.12;
       ctx.beginPath();
       rect(selected);
       ctx.fill();
       ctx.globalAlpha = 1;
-      ctx.lineWidth = 1.5;
-      ctx.beginPath();
-      rect(selected);
+      ctx.lineWidth = 1.25;
+      ctx.shadowColor = colour;
+      ctx.shadowBlur = 12 * glow;
       ctx.stroke();
+      ctx.shadowBlur = 0;
     }
 
     if (this.options.showMarks) this.renderMarks(ctx, X, Y, onScreen);
@@ -756,41 +786,23 @@ export class Gridmap {
       }
     }
 
-    this.renderMarkEmphasis(ctx, X, Y, useNumbers, dot, damping);
+    this.renderMarkEmphasis(ctx, X, Y, useNumbers, dot);
     ctx.globalAlpha = 1;
   }
 
-  renderMarkEmphasis(ctx, X, Y, useNumbers, dot, damping) {
+  renderMarkEmphasis(ctx, X, Y, useNumbers, dot) {
     const hover = this.state.hover;
-    const selected = this.state.selected;
-
-    if (!useNumbers && hover) {
-      const colour = this.colourOf(hover, this.options.theme.text);
-      const radius = dot * this.markScale(hover) / 2;
-      ctx.fillStyle = colour;
-      ctx.strokeStyle = colour;
-      ctx.globalAlpha = 1;
-      ctx.beginPath();
-      ctx.arc(X(hover.centerX), Y(hover.centerY), radius + 1.2, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.globalAlpha = 0.35;
-      ctx.beginPath();
-      ctx.arc(X(hover.centerX), Y(hover.centerY), radius + 7, 0, Math.PI * 2);
-      ctx.stroke();
-    }
-
-    if (selected) {
-      const colour = this.colourOf(selected, this.options.theme.text);
-      const numberSize = this.numberWorldSize(selected) * this.camera.k * damping;
-      const numberRadius = Math.max(numberSize * 0.55, String(selected.label).length * 0.6 * numberSize / 2);
-      const starRadius = dot * this.markScale(selected) / 2;
-      ctx.strokeStyle = colour;
-      ctx.globalAlpha = 1;
-      ctx.lineWidth = 1;
-      ctx.beginPath();
-      ctx.arc(X(selected.centerX), Y(selected.centerY), useNumbers ? numberRadius + 5 : starRadius + 6, 0, Math.PI * 2);
-      ctx.stroke();
-    }
+    if (useNumbers || !hover) return;
+    const radius = dot * this.markScale(hover) / 2;
+    const colour = this.colourOf(hover, this.options.theme.text);
+    ctx.fillStyle = colour;
+    ctx.globalAlpha = 1;
+    ctx.shadowColor = colour;
+    ctx.shadowBlur = 8 * this.glow();
+    ctx.beginPath();
+    ctx.arc(X(hover.centerX), Y(hover.centerY), radius + 1.2, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.shadowBlur = 0;
   }
 
   renderVeil(ctx, rect) {
@@ -823,7 +835,7 @@ export class Gridmap {
         top: `${Y(layer.y + layer.height / 2)}px`,
         transform: 'translate(-50%, -50%) rotate(-90deg)',
         transformOrigin: 'center',
-        color: selected?.layerIndex === layer.index ? this.options.theme.text : this.options.theme.mutedText,
+        color: selected?.layerIndex === layer.index ? this.options.theme.layerLine : this.options.theme.mutedText,
         fontSize: '9.5px',
         letterSpacing: '0.32em',
         whiteSpace: 'nowrap',
@@ -857,12 +869,13 @@ export class Gridmap {
         whiteSpace: 'nowrap',
         textOverflow: 'clip',
         color: this.colourOf(item, this.options.theme.mutedText),
+        textShadow: labelGlow(this.colourOf(item, null), this.glow()),
         background: this.options.theme.background,
         padding: '0 4px',
         fontSize: '9px',
         letterSpacing: '0.14em',
         lineHeight: '1.33',
-        opacity: selected?.itemIndex === item.index || hover?.itemIndex === item.index ? '1' : '0.72',
+        opacity: selected?.itemIndex === item.index || hover?.itemIndex === item.index ? '1' : '0.88',
       });
     }
   }

@@ -4,25 +4,28 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Project Gridmap</title>
-<meta name="theme-color" content="#0a0b0c">
+<meta name="theme-color" content="#000000">
 <!-- A single chapter cell with its star, inline so there's no extra file. -->
-<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' fill='%230a0b0c'/%3E%3Crect x='5.5' y='5.5' width='21' height='21' fill='none' stroke='%23d9d5cd' stroke-width='1.5'/%3E%3Ccircle cx='16' cy='16' r='3.5' fill='%23f2efe8'/%3E%3C/svg%3E">
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' fill='%23000000'/%3E%3Crect x='5.5' y='5.5' width='21' height='21' fill='none' stroke='%23cdd2d0' stroke-width='1.5'/%3E%3Ccircle cx='16' cy='16' r='3.5' fill='%23f7f7fa'/%3E%3C/svg%3E">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
 <style>
   :root {
-    --bg:       #0a0b0c;
-    --ink:      #f2efe8;   /* stars, strongest lines, primary text */
-    --ink-2:    #a19d94;   /* secondary text */
-    --ink-3:    #5c5954;   /* faint text */
-    --line-ch:  #2a2c2e;   /* chapter boundaries: fine */
-    --line-bk:  #7d7a74;   /* book boundaries: medium */
-    --line-dv:  #aeaaa2;   /* division boundaries: stronger */
-    --line-ts:  #d9d5cd;   /* testament boundaries: strongest */
+    /* Pure black space, light neutral structure. Colour is reserved for the
+       divisions (colours.json): nothing else on the page is coloured. */
+    --bg:       #000000;
+    --ink:      #f7f7fa;   /* stars, strongest lines, primary text */
+    --ink-2:    #a3a3ad;   /* secondary text */
+    --ink-3:    #5c5c66;   /* faint text */
+    --line-ch:  #1c1c22;   /* chapter boundaries: fine */
+    --line-bk:  #94949a;   /* book boundaries: medium */
+    --line-dv:  #94949a;   /* division boundaries: stronger */
+    --line-ts: #94949a;   /* testament boundaries: strongest; also the selected testament's label */
     --font: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
     --label-px: 9px;       /* book labels; larger on touch screens */
     --chrome-px: 10px;
+    --glow: 0;             /* set from CONFIG.glow */
   }
   @media (pointer: coarse) {
     :root { --label-px: 11px; --chrome-px: 11px; }
@@ -49,7 +52,8 @@
   /* screen-space overlay: labels and star emphasis */
   #overlay text { font-family: var(--font); pointer-events: none; }
   .book-label {
-    font-size: var(--label-px); letter-spacing: .14em; fill: var(--c, var(--ink)); opacity: .72;
+    font-size: var(--label-px); letter-spacing: .14em; fill: var(--c, var(--ink)); opacity: .88;
+    text-shadow: 0 0 calc(6px * var(--glow)) var(--c, transparent), 0 0 calc(14px * var(--glow)) var(--c, transparent);
     dominant-baseline: central; transition: opacity 180ms;
   }
   .label-bg { fill: var(--bg); }
@@ -58,13 +62,11 @@
     font-size: calc(var(--label-px) + .5px); letter-spacing: .32em; fill: var(--ink-2);
     text-anchor: middle; transition: fill 250ms;
   }
-  .testament-label.selected { fill: var(--ink); }
+  .testament-label.selected { fill: var(--line-ts); }
   .chapter-num { font-size: calc(var(--label-px) + 1px); fill: var(--ink-3); }
   .chapter-num.selected { fill: var(--ink); }
-  #hover-star  { fill: var(--c, var(--ink)); }
-  #hover-halo  { fill: none; stroke: var(--c, var(--ink)); stroke-opacity: .35; }
-  #sel-ring    { fill: none; stroke: var(--c, var(--ink)); stroke-width: 1; }
-  body.no-marks :is(#hover-star, #hover-halo, #sel-ring, #chapter-nums) { display: none; }
+  #hover-star  { fill: var(--c, var(--ink)); filter: drop-shadow(0 0 calc(4px * var(--glow)) var(--c, var(--ink))) drop-shadow(0 0 calc(10px * var(--glow)) var(--c, var(--ink))); }
+  body.no-marks :is(#hover-star, #chapter-nums) { display: none; }
 
   /* chrome: almost none */
   .chrome { position: fixed; font-size: var(--chrome-px); letter-spacing: .22em; text-transform: uppercase; line-height: 1.9; }
@@ -124,7 +126,7 @@
   .game-meta { font-size: var(--chrome-px); letter-spacing: .22em; text-transform: uppercase; color: var(--ink-2); line-height: 1.9; }
   .clue { font-size: 20px; line-height: 1.35; color: var(--ink); max-width: 30ch; margin: 2px 0 0; text-wrap: balance; }
   .clue::before { content: '\201C'; } .clue::after { content: '\201D'; }
-  .answer { font-size: var(--chrome-px); letter-spacing: .22em; text-transform: uppercase; color: var(--c, var(--ink)); line-height: 2.2; }
+  .answer { font-size: var(--chrome-px); letter-spacing: .22em; text-transform: uppercase; color: var(--c, var(--ink)); text-shadow: 0 0 calc(8px * var(--glow)) var(--c, transparent); line-height: 2.2; }
   .answer:empty { display: none; }
 
   #game-tray {
@@ -169,11 +171,11 @@
   #tooltip {
     position: fixed; pointer-events: none; opacity: 0; transition: opacity 120ms;
     font-size: var(--chrome-px); letter-spacing: .16em; text-transform: uppercase; line-height: 1.6;
-    padding: 5px 8px; background: var(--bg); border-left: 1px solid var(--line-bk);
+    padding: 5px 8px; background: var(--bg); border-left: 1px solid var(--c, var(--line-bk));
   }
   #tooltip.on { opacity: 1; }
   #tooltip .d { color: var(--ink-2); }
-  #tooltip .b { color: var(--c, var(--ink)); }
+  #tooltip .b { color: var(--c, var(--ink)); text-shadow: 0 0 calc(8px * var(--glow)) var(--c, transparent); }
 </style>
 </head>
 <body>
@@ -184,9 +186,7 @@
     <g id="testament-labels"></g>
     <g id="book-labels"></g>
     <g id="chapter-nums"></g>
-    <circle id="hover-halo" r="9" visibility="hidden"/>
     <circle id="hover-star" r="3" visibility="hidden"/>
-    <circle id="sel-ring"   r="8" visibility="hidden"/>
   </g>
 </svg>
 
@@ -217,7 +217,7 @@
 const CONFIG = {
   centreMark: 'number',   // what marks each chapter's centre: 'number' (its chapter number) or 'star' (a point)
   showMarks: true,        // show the centre marks at all
-  markOpacity: 0.5,       // 0–1: brightness of the centre marks
+  markOpacity: 0.75,      // 0–1: brightness of the centre marks
   relativeMarkSize: true, // larger chapters (more verses) get a larger mark
   markMaxSize: 0.4,       // 0–1: the largest a chapter number may be, as a share of its cell
   numberMinPx: 8,         // numbers replace stars once a typical chapter's number is this big on screen
@@ -228,6 +228,7 @@ const CONFIG = {
   },
   bookLabels: 'short', // book names on the map: 'full' (Genesis) or 'short' (GEN)
   colours: true,       // colour book borders, stars and names from colours.json
+  glow: 0,             // 0–1: neon bloom on book borders, labels, hover and selection, in the book's colour; 0 is off
 };
 
 /* =====================================================================
@@ -261,7 +262,7 @@ const booksOf = (t) => t.divisions.flatMap((d) =>
   d.books.map((b) => ({ ...b, divisionId: d.id, divisionName: d.name })));
 
 
-// Book colours from colours.json: { GEN: '#c6feff', ... }. Presentation
+// Book colours from colours.json: { GEN: '#80d0ff', ... }. Presentation
 // only, so it stays out of the geometry model. Optional: without it the
 // map is monochrome.
 let COLOURS = {};
@@ -851,13 +852,25 @@ function paint() {
     ctx.stroke();
   }
 
-  // Book borders in their colour; a hovered division's books brighten.
-  const litA = fade('lit', hd ? 1 : 0, 180), litDiv = remember('lit', hd);
+  // Book borders in their colour. With CONFIG.glow, neon: under each crisp
+  // border a soft wide stroke of the same colour (one path per colour).
+  const glow = Math.min(1, Math.max(0, CONFIG.glow || 0));
+  const blooms = new Map();
+  for (const b of glow > 0 ? books : []) {
+    const c = colourOf(b);
+    if (!c) continue;
+    if (!blooms.has(c)) blooms.set(c, []);
+    blooms.get(c).push(b);
+  }
+  for (const [c, bs] of blooms) {
+    ctx.strokeStyle = c; ctx.beginPath(); bs.forEach(rect);
+    ctx.globalAlpha = .09 * glow; ctx.lineWidth = 6; ctx.stroke();
+    ctx.globalAlpha = .2 * glow; ctx.lineWidth = 2.5; ctx.stroke();
+  }
   ctx.lineWidth = 1;
   for (const b of books) {
     const c = colourOf(b);
-    const lit = litDiv && b.divisionIndex === litDiv.index ? litA : 0;
-    ctx.globalAlpha = c ? .7 + .3 * lit : 1;
+    ctx.globalAlpha = 1;
     ctx.strokeStyle = c || palette['line-bk'];
     ctx.beginPath(); rect(b); ctx.stroke();
   }
@@ -872,21 +885,15 @@ function paint() {
   ctx.strokeStyle = palette['line-ts']; ctx.lineWidth = 1.5;
   ctx.beginPath(); MODEL.testaments.forEach(rect); ctx.stroke();
 
-  // Hovered book outline.
-  if (bookA > 0 && shownBook) {
-    ctx.globalAlpha = bookA; ctx.strokeStyle = colour(shownBook, palette.ink); ctx.lineWidth = 1;
-    ctx.beginPath(); rect(shownBook); ctx.stroke();
-  }
-
-  // Selection: its book outlined, the chapter filled and outlined.
+  // Selection: the chapter filled and outlined in its book's colour.
+  // (Book borders never change on hover or selection: the cell is enough.)
   const sel = state.selected;
   if (sel) {
-    const sb = MODEL.books[sel.bookIndex], c = colour(sb, palette.ink);
-    ctx.globalAlpha = 1; ctx.strokeStyle = c; ctx.lineWidth = 1.5;
-    ctx.beginPath(); rect(sb); ctx.stroke();
-    ctx.fillStyle = c; ctx.globalAlpha = .1;
+    const c = colour(MODEL.books[sel.bookIndex], palette.ink);
+    ctx.fillStyle = c; ctx.strokeStyle = c; ctx.globalAlpha = .12;
     ctx.beginPath(); rect(sel); ctx.fill();
-    ctx.globalAlpha = 1; ctx.lineWidth = 1; ctx.stroke();
+    ctx.globalAlpha = 1; ctx.lineWidth = 1.25; ctx.shadowColor = c; ctx.shadowBlur = 12 * glow; ctx.stroke();
+    ctx.shadowBlur = 0;
   }
 
   // Centre marks: stars, crossfading to numbers once numbers are legible.
@@ -1037,21 +1044,12 @@ function renderOverlay() {
     if (on !== l.on) { l.el.setAttribute('visibility', on ? 'visible' : 'hidden'); l.on = on; }
   }
 
-  // Emphasis: over stars, a brighter star and halo; over numbers, the
-  // number itself brightens (painted) and the ring circles it.
-  const dot = starDot(), nz = numberDamping();
+  // Emphasis: over stars, a brighter star; over numbers, the number itself
+  // brightens (painted). The cell's square outline marks the selection.
+  const dot = starDot();
   placeStar($('hover-star'), numbersOn ? null : state.hover);
-  placeStar($('hover-halo'), numbersOn ? null : state.hover);
-  placeStar($('sel-ring'), state.selected);
   const starRadius = (c) => (c ? dot * starScale(c) / 2 : 0);
-  const numberRadius = (c) => {
-    if (!c) return 0;
-    const px = numberSize(c) * k * nz;
-    return Math.max(px * .55, String(c.chapter).length * DIGIT_EM * px / 2);
-  };
   $('hover-star').setAttribute('r', starRadius(state.hover) + 1.2);
-  $('hover-halo').setAttribute('r', starRadius(state.hover) + 7);
-  $('sel-ring').setAttribute('r', (numbersOn ? numberRadius(state.selected) + 5 : starRadius(state.selected) + 6));
 }
 
 function placeStar(el, c) {
@@ -1080,10 +1078,9 @@ function renderCamera() {
 // canvas, which reads the state itself when it paints).
 function renderState() {
   const hb = state.hover ? MODEL.books[state.hover.bookIndex] : null;
-  for (const id of ['hover-star', 'hover-halo']) tint($(id), hb);
+  tint($('hover-star'), hb);
 
   const s = state.selected;
-  tint($('sel-ring'), s && MODEL.books[s.bookIndex]);
 
   labels.books.forEach(({ b, el }) => {
     el.classList.toggle('hover', hb === b);
@@ -1702,6 +1699,7 @@ async function start() {
     if (missing.length) console.warn('No colour for:', missing.join(', '));
   }
   document.body.classList.toggle('no-marks', !CONFIG.showMarks);
+  document.documentElement.style.setProperty('--glow', Math.min(1, Math.max(0, CONFIG.glow || 0)));
   readPalette();
   sizeCanvas();
   $('hint').textContent = COARSE
