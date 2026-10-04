@@ -73,7 +73,9 @@ export class Gridmap {
     this.listeners = new Map();
     this.frameRequested = false;
     this.destroyed = false;
-    this.pointer = { x: 0, y: 0, inside: false, down: false, moved: false };
+    this.pointers = new Map();
+    this.drag = null;
+    this.gesture = null;
     this.resizeObserver = null;
 
     this.mount();
@@ -139,6 +141,7 @@ export class Gridmap {
       pointerdown: (event) => this.onPointerDown(event),
       pointermove: (event) => this.onPointerMove(event),
       pointerup: (event) => this.onPointerUp(event),
+      pointercancel: (event) => this.onPointerCancel(event),
       pointerleave: (event) => this.onPointerLeave(event),
       wheel: (event) => this.onWheel(event),
       keydown: (event) => {
@@ -149,7 +152,7 @@ export class Gridmap {
     this.root.addEventListener('pointerdown', this.bound.pointerdown);
     this.root.addEventListener('pointermove', this.bound.pointermove);
     this.root.addEventListener('pointerup', this.bound.pointerup);
-    this.root.addEventListener('pointercancel', this.bound.pointerup);
+    this.root.addEventListener('pointercancel', this.bound.pointercancel);
     this.root.addEventListener('pointerleave', this.bound.pointerleave);
     this.root.addEventListener('wheel', this.bound.wheel, { passive: false });
     window.addEventListener('keydown', this.bound.keydown);
@@ -402,62 +405,155 @@ export class Gridmap {
     return cell;
   }
 
-  onPointerDown(event) {
-    if (event.pointerType === 'mouse' && event.button !== 0) return;
-    this.pointer = {
-      x: event.clientX,
-      y: event.clientY,
-      startX: event.clientX,
-      startY: event.clientY,
+  pointerPoint(event) {
+    const rect = this.root.getBoundingClientRect();
+    return {
+      id: event.pointerId,
+      clientX: event.clientX,
+      clientY: event.clientY,
+      x: event.clientX - rect.left,
+      y: event.clientY - rect.top,
+    };
+  }
+
+  gesturePoints() {
+    const points = [...this.pointers.values()];
+    if (points.length < 2) return null;
+    const [a, b] = points;
+    const x = (a.x + b.x) / 2;
+    const y = (a.y + b.y) / 2;
+    const distance = Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY);
+    return { x, y, distance };
+  }
+
+  startDrag(point, moved = false) {
+    this.drag = {
+      id: point.id,
+      startX: point.clientX,
+      startY: point.clientY,
       cam: { ...this.camera },
-      inside: true,
-      down: true,
+      moved,
+    };
+    this.gesture = null;
+  }
+
+  startGesture() {
+    const points = this.gesturePoints();
+    if (!points || points.distance <= 0) return;
+    this.drag = null;
+    this.gesture = {
+      ...points,
+      cam: { ...this.camera },
+      worldX: this.toWorldX(points.x),
+      worldY: this.toWorldY(points.y),
       moved: false,
     };
+  }
+
+  onPointerDown(event) {
+    if (event.pointerType === 'mouse' && event.button !== 0) return;
+    const point = this.pointerPoint(event);
+    this.pointers.set(event.pointerId, point);
+    this.showTooltip(null);
     this.root.setPointerCapture?.(event.pointerId);
+
+    if (this.pointers.size === 1) {
+      this.startDrag(point);
+      return;
+    }
+
+    if (this.pointers.size === 2) {
+      this.startGesture();
+    }
   }
 
   onPointerMove(event) {
-    const rect = this.root.getBoundingClientRect();
-    const x = event.clientX - rect.left;
-    const y = event.clientY - rect.top;
+    const point = this.pointerPoint(event);
 
-    if (this.pointer.down) {
-      const dx = event.clientX - this.pointer.startX;
-      const dy = event.clientY - this.pointer.startY;
-      if (Math.hypot(dx, dy) > 4) this.pointer.moved = true;
-      if (this.pointer.moved) {
-        const cam = this.pointer.cam;
+    if (this.pointers.has(event.pointerId)) {
+      this.pointers.set(event.pointerId, point);
+    }
+
+    if (this.gesture) {
+      const points = this.gesturePoints();
+      if (!points || points.distance <= 0) return;
+      const distanceDelta = Math.abs(points.distance - this.gesture.distance);
+      const moveDelta = Math.hypot(points.x - this.gesture.x, points.y - this.gesture.y);
+      if (distanceDelta > 2 || moveDelta > 4) this.gesture.moved = true;
+      if (this.gesture.moved) {
+        const nextK = this.gesture.cam.k * (points.distance / this.gesture.distance);
+        this.zoomAround(points.x, points.y, this.gesture.worldX, this.gesture.worldY, nextK);
+      }
+      return;
+    }
+
+    if (this.drag && this.pointers.has(event.pointerId)) {
+      const dx = event.clientX - this.drag.startX;
+      const dy = event.clientY - this.drag.startY;
+      if (Math.hypot(dx, dy) > 4) this.drag.moved = true;
+      if (this.drag.moved) {
+        const cam = this.drag.cam;
         this.setCamera(cam.cx - dx / cam.k, cam.cy - dy / cam.k, cam.k);
       }
       return;
     }
 
-    const hover = this.hitTest(x, y);
+    const hover = this.hitTest(point.x, point.y);
     if (hover !== this.state.hover) {
       this.state.hover = hover;
       this.emit('hoverCell', hover);
       this.render();
     }
-    this.showTooltip(hover, x, y);
+    this.showTooltip(hover, point.x, point.y);
   }
 
   onPointerUp(event) {
-    if (!this.pointer.down) return;
-    const rect = this.root.getBoundingClientRect();
-    const x = event.clientX - rect.left;
-    const y = event.clientY - rect.top;
-    const wasTap = !this.pointer.moved;
-    this.pointer.down = false;
+    const point = this.pointerPoint(event);
+    const drag = this.drag;
+    const wasTap = drag?.id === event.pointerId && !drag.moved && this.pointers.size === 1 && !this.gesture;
+    this.pointers.delete(event.pointerId);
+    this.root.releasePointerCapture?.(event.pointerId);
+
+    if (this.pointers.size >= 2) {
+      this.startGesture();
+      return;
+    }
+
+    if (this.pointers.size === 1) {
+      this.startDrag([...this.pointers.values()][0], true);
+      return;
+    }
+
+    this.drag = null;
+    this.gesture = null;
+
     if (wasTap) {
-      const cell = this.hitTest(x, y);
+      const cell = this.hitTest(point.x, point.y);
       if (cell) this.selectCell(cell);
       else this.focusMap();
     }
   }
 
+  onPointerCancel(event) {
+    this.pointers.delete(event.pointerId);
+    this.root.releasePointerCapture?.(event.pointerId);
+
+    if (this.pointers.size >= 2) {
+      this.startGesture();
+      return;
+    }
+
+    if (this.pointers.size === 1) {
+      this.startDrag([...this.pointers.values()][0], true);
+      return;
+    }
+
+    this.drag = null;
+    this.gesture = null;
+  }
+
   onPointerLeave() {
-    if (this.pointer.down) return;
+    if (this.pointers.size) return;
     this.state.hover = null;
     this.showTooltip(null);
     this.render();
