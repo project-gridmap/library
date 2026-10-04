@@ -743,10 +743,10 @@ export class Gridmap {
         : this.options.itemLabels === 'full' ? item.label : item.shortLabel;
       const text = `${item.index + 1}.${full}`.toUpperCase();
       const number = String(item.index + 1);
-      const label = text.length * 7.3 + 20 <= w ? text : number.length * 7.3 + 14 <= w ? number : null;
-      if (!label) continue;
+      const itemLabelText = text.length * 7.3 + 20 <= w ? text : number.length * 7.3 + 14 <= w ? number : null;
+      if (!itemLabelText) continue;
 
-      const el = createElement('div', { text: label }, this.overlay);
+      const el = createElement('div', { text: itemLabelText }, this.overlay);
       Object.assign(el.style, {
         position: 'absolute',
         left: `${X(item.x) + 5}px`,
