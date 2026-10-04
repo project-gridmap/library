@@ -834,12 +834,17 @@ export class Gridmap {
       const w = item.width * this.camera.k;
       const h = item.height * this.camera.k;
       if (h < 22) continue;
-      const full = typeof labelItem === 'function'
-        ? labelItem(item, this)
-        : this.options.itemLabels === 'full' ? item.label : item.shortLabel;
-      const text = `${item.index + 1}.${full}`.toUpperCase();
       const number = String(item.index + 1);
-      const itemLabelText = text.length * 7.3 + 20 <= w ? text : number.length * 7.3 + 14 <= w ? number : null;
+      const candidates = typeof labelItem === 'function'
+        ? [labelItem(item, this)]
+        : this.options.itemLabels === 'short'
+          ? [item.shortLabel]
+          : [item.label, item.shortLabel];
+      const itemLabelText = candidates
+        .filter(Boolean)
+        .map((candidate) => `${item.index + 1}.${candidate}`.toUpperCase())
+        .find((candidate) => candidate.length * 7.3 + 20 <= w)
+        ?? (number.length * 7.3 + 14 <= w ? number : null);
       if (!itemLabelText) continue;
 
       const el = createElement('div', { text: itemLabelText }, this.overlay);
