@@ -110,6 +110,8 @@ export type GridmapModel = {
   data: GridmapData;
   world: GridmapRect & { gutter?: number };
   layout?: string;
+  /** Set on a model built for the 'fit' layout: its world's width / height. */
+  fitRatio?: number;
   cellSide: number;
   layers: GridmapLayer[];
   groups: GridmapGroup[];
@@ -151,7 +153,14 @@ export type GridmapOptions = {
   container: HTMLElement;
   data: GridmapData;
   worlds?: Record<string, GridmapRect & { gutter?: number }>;
-  layout?: 'auto' | string;
+  /**
+   * 'auto' (default): the portrait or landscape world, by the container's orientation.
+   * 'fit': a world shaped like the container, snapped to the nearest of `fitRatios`, so the map fills it.
+   * Any other value: that world from `worlds`.
+   */
+  layout?: 'auto' | 'fit' | string;
+  /** World shapes (width / height) the 'fit' layout may use. Defaults to DEFAULT_FIT_RATIOS. */
+  fitRatios?: number[];
   colours?: Record<string, string>;
   colourBy?: 'item' | 'group' | 'layer' | 'cell';
   showMarks?: boolean;
@@ -183,6 +192,12 @@ export type GridmapOptions = {
 };
 
 export const DEFAULT_WORLDS: Record<string, GridmapRect & { gutter: number }>;
+export const DEFAULT_FIT_RATIOS: number[];
+
+/** The ratio nearest `aspect` (log scale), keeping `current` unless another is nearer by more than `slack`. */
+export function pickFitRatio(aspect: number, ratios?: number[], current?: number | null, slack?: number): number;
+/** A world of the given width / height ratio, for buildGridmapModel. */
+export function fitWorld(ratio: number, gutter?: number): GridmapRect & { gutter: number };
 
 export function normaliseGridmapData(data: GridmapData): GridmapData;
 export function buildGridmapModel(data: GridmapData, world?: GridmapRect & { gutter?: number }): GridmapModel;

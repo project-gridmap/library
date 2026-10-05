@@ -1,6 +1,8 @@
 'use strict';
 
-import { DEFAULT_WORLDS, buildGridmapModel, cellAt, coverCells, normaliseGridmapData } from './model.js';
+import {
+  DEFAULT_FIT_RATIOS, DEFAULT_WORLDS, buildGridmapModel, cellAt, coverCells, fitWorld, normaliseGridmapData, pickFitRatio,
+} from './model.js';
 
 const DEFAULT_THEME = {
   background: '#000000',
@@ -19,7 +21,10 @@ const DEFAULT_THEME = {
 
 const DEFAULT_OPTIONS = {
   worlds: DEFAULT_WORLDS,
+  // 'auto': the portrait or landscape world, by orientation. 'fit': a world
+  // shaped like the container (snapped to one of fitRatios), so it fills it.
   layout: 'auto',
+  fitRatios: DEFAULT_FIT_RATIOS,
   colours: {},
   colourBy: 'item',
   showMarks: true,
@@ -180,23 +185,42 @@ export class Gridmap {
     }
   }
 
+  // Models are built on first use, one per layout: a world, or a fit ratio.
   rebuildModels() {
     this.models = {};
-    for (const [name, world] of Object.entries(this.options.worlds)) {
+  }
+
+  modelFor(name) {
+    if (!this.models[name]) {
+      const ratio = name.startsWith('fit:') ? Number(name.slice(4)) : null;
+      const world = ratio ? fitWorld(ratio) : this.options.worlds[name];
+      const fallback = Object.keys(this.options.worlds)[0];
+      if (!world) return name === fallback ? null : this.modelFor(fallback);
       const model = buildGridmapModel(this.data, world);
       model.layout = name;
+      if (ratio) model.fitRatio = ratio;
       this.models[name] = model;
     }
+    return this.models[name];
   }
 
   layoutName() {
+    if (this.options.layout === 'fit') return `fit:${this.fitRatio()}`;
     if (this.options.layout !== 'auto') return this.options.layout;
     return this.container.clientHeight > this.container.clientWidth ? 'portrait' : 'landscape';
   }
 
+  // The fit ratio for the room left inside the margins.
+  fitRatio() {
+    const { w, h } = this.viewport();
+    const m = this.margins();
+    const aspect = Math.max(1, w - m.left - m.right) / Math.max(1, h - m.top - m.bottom);
+    return pickFitRatio(aspect, this.options.fitRatios, this.model?.fitRatio ?? null);
+  }
+
   useLayout(name) {
     const old = this.model;
-    this.model = this.models[name] ?? Object.values(this.models)[0];
+    this.model = this.modelFor(name);
     if (old && old !== this.model) {
       const same = (collection, entity) => (entity ? this.model[collection][entity.index] : null);
       this.state.hover = null;
@@ -288,6 +312,10 @@ export class Gridmap {
   setConfig(config = {}) {
     this.options = mergeOptions({ ...this.options, ...config });
     if (config.disabledCells) this.setDisabledCells(config.disabledCells);
+    if ('layout' in config || 'fitRatios' in config) {
+      this.useLayout(this.layoutName());
+      return;
+    }
     this.prepareMarks();
     this.render();
   }
@@ -350,13 +378,31 @@ export class Gridmap {
     return (y - h / 2) / this.camera.k + this.camera.cy;
   }
 
+  // Room kept around a framed region. Under 'fit' it's tight, bar a gutter
+  // on the left for the rotated layer labels, so the map takes the rest.
+  margins() {
+    const { w, h } = this.viewport();
+    const small = Math.min(w, h) < 700;
+    if (this.options.layout === 'fit') {
+      const margin = small ? 12 : 32;
+      return { top: margin, right: margin, bottom: margin, left: margin + 24 };
+    }
+    const margin = small ? 24 : 56;
+    return { top: margin, right: margin, bottom: margin, left: margin };
+  }
+
   frame(rect, fill = 0.92) {
     const { w, h } = this.viewport();
-    const margin = Math.min(w, h) < 700 ? 24 : 56;
-    const availableW = Math.max(1, w - margin * 2);
-    const availableH = Math.max(1, h - margin * 2);
+    const m = this.margins();
+    const availableW = Math.max(1, w - m.left - m.right);
+    const availableH = Math.max(1, h - m.top - m.bottom);
     const k = Math.min(availableW / rect.width, availableH / rect.height, (w * fill) / rect.width, (h * fill) / rect.height);
-    return { cx: rect.x + rect.width / 2, cy: rect.y + rect.height / 2, k };
+    // centred in the room inside the margins, which is off-centre when they're uneven
+    return {
+      cx: rect.x + rect.width / 2 - (m.left - m.right) / 2 / k,
+      cy: rect.y + rect.height / 2 - (m.top - m.bottom) / 2 / k,
+      k,
+    };
   }
 
   clampK(k) {
@@ -392,7 +438,7 @@ export class Gridmap {
     if (focus.level === 'cell') return this.frame(focus.cell, 0.42);
     if (focus.level === 'item') return this.frame(focus.item, 0.72);
     if (focus.level === 'group') return this.frame(focus.group.bounds, 0.9);
-    return this.frame(this.model.world);
+    return this.frame(this.model.world, this.options.layout === 'fit' ? 1 : 0.92);
   }
 
   setFocus(level, value = null) {

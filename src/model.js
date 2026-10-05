@@ -5,6 +5,26 @@ export const DEFAULT_WORLDS = {
   landscape: { x: 0, y: 0, width: 1600, height: 1000, gutter: 30 },
 };
 
+// World shapes (width / height) the 'fit' layout snaps to: few enough that
+// each can be checked by eye, and one device always sees the same map.
+export const DEFAULT_FIT_RATIOS = [0.5, 0.6, 0.7, 0.85, 1, 1.25, 1.6];
+
+// The fit ratio nearest an aspect, on a log scale. The current ratio is kept
+// unless another is nearer by more than `slack`, so a small resize (a phone's
+// address bar collapsing) doesn't reshuffle the map back and forth.
+export function pickFitRatio(aspect, ratios = DEFAULT_FIT_RATIOS, current = null, slack = 0.1) {
+  const valid = (ratios ?? []).filter((ratio) => Number.isFinite(ratio) && ratio > 0);
+  const options = valid.length ? valid : DEFAULT_FIT_RATIOS;
+  const target = Number.isFinite(aspect) && aspect > 0 ? aspect : 1;
+  const distance = (ratio) => Math.abs(Math.log(target / ratio));
+  const best = options.reduce((a, b) => (distance(b) < distance(a) ? b : a));
+  return options.includes(current) && distance(current) - distance(best) <= slack ? current : best;
+}
+
+export function fitWorld(ratio, gutter = 30) {
+  return { x: 0, y: 0, width: 1000, height: 1000 / ratio, gutter };
+}
+
 const EPS = 1e-6;
 const near = (a, b) => Math.abs(a - b) < EPS;
 const slug = (s) => String(s).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
