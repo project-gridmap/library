@@ -1598,6 +1598,7 @@ function renderGuessButton() {
   const [label, enabled] = game.over ? ['Play again', true]
     : !c ? ['Select a chapter', false]
     : guessed(c) ? [`${chapterRef(c)} · already guessed`, false]
+    : !stillPossible(c) ? [`${chapterRef(c)} · ruled out`, false]
     : [`Guess ${chapterRef(c)}`, true];
   if (btn.textContent !== label) btn.textContent = label;
   btn.disabled = !enabled;
@@ -1627,7 +1628,7 @@ function renderGameMap() {
 
 function paintGameLayers({ ctx, rect, colour, palette }) {
   if (gameLayer.ruledOut.length) {
-    ctx.globalAlpha = .62; ctx.fillStyle = palette.bg;
+    ctx.globalAlpha = .9; ctx.fillStyle = palette.bg;   // barely visible: what's left stands out
     ctx.beginPath(); gameLayer.ruledOut.forEach(rect); ctx.fill();
   }
   if (gameLayer.guessed.length) {

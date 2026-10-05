@@ -351,6 +351,27 @@ export function buildGridmapModel(input, world = DEFAULT_WORLDS.landscape) {
   return model;
 }
 
+// The smallest set of rectangles covering a set of cells: a whole item where
+// every one of its cells is in the set, otherwise the cells alone. Also says
+// which items and layers are covered entirely, so their labels can follow.
+export function coverCells(model, ids) {
+  const cover = { rects: [], items: new Set(), layers: new Set() };
+  if (!model || !ids?.size) return cover;
+  for (const item of model.items) {
+    const covered = item.cells.filter((cell) => ids.has(cell.id));
+    if (covered.length && covered.length === item.cells.length) {
+      cover.rects.push(item);
+      cover.items.add(item.index);
+    } else {
+      cover.rects.push(...covered);
+    }
+  }
+  for (const layer of model.layers) {
+    if (layer.items.length && layer.items.every((item) => cover.items.has(item.index))) cover.layers.add(layer.index);
+  }
+  return cover;
+}
+
 export function cellAt(model, x, y) {
   if (!model) return null;
   for (const item of model.items) {

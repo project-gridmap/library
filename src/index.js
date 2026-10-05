@@ -4,6 +4,7 @@ export {
   DEFAULT_WORLDS,
   buildGridmapModel,
   cellAt,
+  coverCells,
   itemsOf,
   normaliseGridmapData,
   validateGridmapModel,

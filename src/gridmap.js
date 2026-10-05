@@ -1,6 +1,6 @@
 'use strict';
 
-import { DEFAULT_WORLDS, buildGridmapModel, cellAt, normaliseGridmapData } from './model.js';
+import { DEFAULT_WORLDS, buildGridmapModel, cellAt, coverCells, normaliseGridmapData } from './model.js';
 
 const DEFAULT_THEME = {
   background: '#000000',
@@ -30,6 +30,10 @@ const DEFAULT_OPTIONS = {
   numberMinPx: 8,
   itemLabels: 'short',
   history: false,
+  // Cells that can't be selected: veiled almost to nothing, and a tap on one
+  // shows its labels.disabled message instead of selecting it.
+  disabledCells: [],
+  disabledOpacity: 0.9,
   theme: DEFAULT_THEME,
   labels: {},
 };
@@ -85,6 +89,9 @@ export class Gridmap {
     this.drag = null;
     this.gesture = null;
     this.resizeObserver = null;
+    this.disabled = new Set((this.options.disabledCells ?? []).map(String));
+    this.disabledCover = null;
+    this.tooltipTimer = null;
 
     this.mount();
     this.rebuildModels();
@@ -202,6 +209,7 @@ export class Gridmap {
         cell: same('cells', focus.cell),
       };
     }
+    this.disabledCover = null;
     this.prepareMarks();
     Object.assign(this.camera, this.cameraForFocus(), { free: false });
     this.resize();
@@ -279,8 +287,27 @@ export class Gridmap {
 
   setConfig(config = {}) {
     this.options = mergeOptions({ ...this.options, ...config });
+    if (config.disabledCells) this.setDisabledCells(config.disabledCells);
     this.prepareMarks();
     this.render();
+  }
+
+  setDisabledCells(ids = []) {
+    this.disabled = new Set([...ids].map(String));
+    this.options.disabledCells = [...this.disabled];
+    this.disabledCover = null;
+    this.render();
+  }
+
+  isCellDisabled(idOrCell) {
+    const id = typeof idOrCell === 'string' ? idOrCell : idOrCell?.id;
+    return id != null && this.disabled.has(id);
+  }
+
+  // Rebuilt lazily: the disabled set and the layout each invalidate it.
+  getDisabledCover() {
+    this.disabledCover ??= coverCells(this.model, this.disabled);
+    return this.disabledCover;
   }
 
   getModel() {
@@ -466,6 +493,7 @@ export class Gridmap {
     if (event.pointerType === 'mouse' && event.button !== 0) return;
     const point = this.pointerPoint(event);
     this.pointers.set(event.pointerId, point);
+    clearTimeout(this.tooltipTimer);
     this.showTooltip(null);
     this.root.setPointerCapture?.(event.pointerId);
 
@@ -513,6 +541,7 @@ export class Gridmap {
     const hover = this.hitTest(point.x, point.y);
     if (hover !== this.state.hover) {
       this.state.hover = hover;
+      this.root.style.cursor = hover && this.isCellDisabled(hover) ? 'not-allowed' : '';
       this.emit('hoverCell', hover);
       this.render();
     }
@@ -541,9 +570,21 @@ export class Gridmap {
 
     if (wasTap) {
       const cell = this.hitTest(point.x, point.y);
-      if (cell) this.selectCell(cell);
+      if (cell && this.isCellDisabled(cell)) this.refuseCell(cell, point, event.pointerType);
+      else if (cell) this.selectCell(cell);
       else this.focusMap();
     }
+  }
+
+  // A tap on a disabled cell leaves the selection alone and says why. A mouse
+  // already shows the message on hover; a finger covers the cell, so the
+  // message flashes above it.
+  refuseCell(cell, point, pointerType) {
+    this.emit('selectDisabledCell', cell);
+    if (pointerType === 'mouse') return;
+    clearTimeout(this.tooltipTimer);
+    this.showTooltip(cell, point.x, point.y, { aboveFinger: true });
+    this.tooltipTimer = setTimeout(() => this.showTooltip(null), 2200);
   }
 
   onPointerCancel(event) {
@@ -580,18 +621,28 @@ export class Gridmap {
     this.zoomAround(x, y, this.toWorldX(x), this.toWorldY(y), this.camera.k * Math.exp(-dy * 0.0015));
   }
 
-  showTooltip(cell, x, y) {
+  showTooltip(cell, x, y, { aboveFinger = false } = {}) {
     this.tooltip.style.opacity = cell ? '1' : '0';
     if (!cell) return;
     const format = this.options.labels.tooltip;
-    this.tooltip.textContent = typeof format === 'function'
+    const text = typeof format === 'function'
       ? format(cell, this)
       : `${cell.groupLabel} / ${cell.itemLabel} / ${cell.label}`;
+    const disabled = this.isCellDisabled(cell);
+    const explain = this.options.labels.disabled;
+    this.tooltip.textContent = disabled && typeof explain === 'function' ? explain(cell, this) : text;
+    this.tooltip.style.maxWidth = disabled ? '240px' : '';
     const width = this.tooltip.offsetWidth;
     const height = this.tooltip.offsetHeight;
     const { w, h } = this.viewport();
-    const left = x + 18 + width > w ? x - 18 - width : x + 18;
-    const top = y + 18 + height > h ? y - 18 - height : y + 18;
+    let left, top;
+    if (aboveFinger) {
+      left = Math.min(x - width / 2, w - width - 8);
+      top = y - 56 - height < 8 ? y + 48 : y - 56 - height;
+    } else {
+      left = x + 18 + width > w ? x - 18 - width : x + 18;
+      top = y + 18 + height > h ? y - 18 - height : y + 18;
+    }
     this.tooltip.style.transform = `translate(${Math.max(8, left)}px, ${Math.max(8, top)}px)`;
   }
 
@@ -715,6 +766,7 @@ export class Gridmap {
     }
 
     if (this.options.showMarks) this.renderMarks(ctx, X, Y, onScreen);
+    this.renderDisabled(ctx, rect, onScreen);
 
     for (const layer of this.layers) {
       layer({
@@ -805,6 +857,20 @@ export class Gridmap {
     ctx.shadowBlur = 0;
   }
 
+  // Disabled cells sink under the background, borders, marks and all, so
+  // what's left in reach stands out. Whole items go as one rectangle.
+  renderDisabled(ctx, rect, onScreen) {
+    if (!this.disabled.size) return;
+    const rects = this.getDisabledCover().rects.filter(onScreen);
+    if (!rects.length) return;
+    ctx.fillStyle = this.options.theme.background;
+    ctx.globalAlpha = Math.min(1, Math.max(0, Number(this.options.disabledOpacity) || 0));
+    ctx.beginPath();
+    rects.forEach(rect);
+    ctx.fill();
+    ctx.globalAlpha = 1;
+  }
+
   renderVeil(ctx, rect) {
     const region = this.focusRegion();
     if (!region) return;
@@ -822,6 +888,8 @@ export class Gridmap {
     const labelItem = this.options.labels.item;
     const selected = this.state.selected;
     const hover = this.state.hover;
+    const cover = this.disabled.size ? this.getDisabledCover() : null;
+    const faded = 1 - Math.min(1, Math.max(0, Number(this.options.disabledOpacity) || 0));
     this.overlay.replaceChildren();
 
     for (const layer of this.model.layers) {
@@ -839,6 +907,7 @@ export class Gridmap {
         fontSize: '9.5px',
         letterSpacing: '0.32em',
         whiteSpace: 'nowrap',
+        opacity: cover?.layers.has(layer.index) ? String(faded) : '',
       });
     }
 
@@ -875,13 +944,15 @@ export class Gridmap {
         fontSize: '9px',
         letterSpacing: '0.14em',
         lineHeight: '1.33',
-        opacity: selected?.itemIndex === item.index || hover?.itemIndex === item.index ? '1' : '0.88',
+        opacity: cover?.items.has(item.index) ? String(faded)
+          : selected?.itemIndex === item.index || hover?.itemIndex === item.index ? '1' : '0.88',
       });
     }
   }
 
   destroy() {
     this.destroyed = true;
+    clearTimeout(this.tooltipTimer);
     this.resizeObserver?.disconnect();
     window.removeEventListener('resize', this.bound?.resize);
     window.removeEventListener('keydown', this.bound?.keydown);

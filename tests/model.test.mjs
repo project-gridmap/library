@@ -4,6 +4,7 @@ import test from 'node:test';
 import {
   buildGridmapModel,
   cellAt,
+  coverCells,
   normaliseGridmapData,
   validateGridmapModel,
 } from '../src/index.js';
@@ -66,4 +67,14 @@ test('locates a cell from world coordinates', () => {
   const actual = cellAt(model, expected.centerX, expected.centerY);
 
   assert.equal(actual.id, 'c.2');
+});
+
+test('covers whole items and layers where every cell is included', () => {
+  const model = buildGridmapModel(data, { x: 0, y: 0, width: 600, height: 400, gutter: 20 });
+  const cover = coverCells(model, new Set(['a.1', 'c.1', 'c.2', 'c.3']));
+
+  assert.deepEqual(cover.rects.map((rect) => rect.id), ['a.1', 'c']);
+  assert.deepEqual([...cover.items], [model.items.find((item) => item.id === 'c').index]);
+  assert.deepEqual([...cover.layers], [model.layers.find((layer) => layer.id === 'beta').index]);
+  assert.equal(coverCells(model, new Set()).rects.length, 0);
 });

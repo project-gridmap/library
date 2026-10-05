@@ -69,6 +69,8 @@ map.focusGroup('module-a');
 map.focusItem('lesson-1');
 map.focusCell('lesson-1.2');
 map.selectCell('lesson-1.2');
+map.setDisabledCells(['lesson-1.1']);
+map.isCellDisabled('lesson-1.1'); // true
 map.addLayer((helpers) => {});
 map.setData(data);
 map.setColours(colours);
@@ -77,3 +79,23 @@ map.destroy();
 
 Custom layers let applications draw domain-specific overlays without adding
 domain language to the library.
+
+## Disabled Cells
+
+Cells passed to `disabledCells` (or `setDisabledCells`) can't be selected. They
+sink under the background (`disabledOpacity`, 0.9 by default), as whole items
+where every cell is disabled, and the labels of fully disabled items and layers
+fade with them. Hovering or tapping one shows `labels.disabled(cell)`, so the
+application can say why, and emits `selectDisabledCell`; the selection is left
+unchanged. `selectCell` itself is not blocked, so applications stay in control.
+
+```js
+const map = createGridmap({
+  // ...
+  disabledCells: ['lesson-1.1'],
+  labels: {
+    disabled: (cell) => `${cell.itemLabel} ${cell.label} is locked`,
+  },
+  onSelectDisabledCell(cell) {},
+});
+```

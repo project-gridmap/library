@@ -162,14 +162,22 @@ export type GridmapOptions = {
   numberMinPx?: number;
   itemLabels?: 'short' | 'full';
   history?: boolean;
+  /** Ids of cells that can't be selected: veiled almost to nothing; a tap shows `labels.disabled` instead of selecting. */
+  disabledCells?: string[];
+  /** 0–1: how much of a disabled cell the background hides. Default 0.9: barely visible. */
+  disabledOpacity?: number;
   theme?: Partial<GridmapTheme>;
   labels?: {
     item?: (item: GridmapItem, map: Gridmap) => string;
     tooltip?: (cell: GridmapCell, map: Gridmap) => string;
+    /** The message for a disabled cell, shown on hover and when tapped (defaults to the tooltip). */
+    disabled?: (cell: GridmapCell, map: Gridmap) => string;
   };
   onReady?: (map: Gridmap) => void;
   onHoverCell?: (cell: GridmapCell | null, map: Gridmap) => void;
   onSelectCell?: (cell: GridmapCell, map: Gridmap) => void;
+  /** A disabled cell was tapped; the selection is unchanged. */
+  onSelectDisabledCell?: (cell: GridmapCell, map: Gridmap) => void;
   onFocusChange?: (focus: Record<string, unknown>, map: Gridmap) => void;
   onDataChange?: (data: GridmapData, map: Gridmap) => void;
 };
@@ -179,6 +187,15 @@ export const DEFAULT_WORLDS: Record<string, GridmapRect & { gutter: number }>;
 export function normaliseGridmapData(data: GridmapData): GridmapData;
 export function buildGridmapModel(data: GridmapData, world?: GridmapRect & { gutter?: number }): GridmapModel;
 export function validateGridmapModel(model: GridmapModel): true;
+export type GridmapCover = {
+  rects: Array<GridmapItem | GridmapCell>;
+  /** Indices of items whose every cell is covered. */
+  items: Set<number>;
+  /** Indices of layers whose every item is covered. */
+  layers: Set<number>;
+};
+
+export function coverCells(model: GridmapModel, ids: Set<string>): GridmapCover;
 export function cellAt(model: GridmapModel, x: number, y: number): GridmapCell | null;
 export function itemsOf(layer: GridmapLayerInput): GridmapItemInput[];
 export function createGridmap(options: GridmapOptions): Gridmap;
@@ -193,6 +210,8 @@ export class Gridmap {
   setConfig(config?: Partial<GridmapOptions>): void;
   getModel(): GridmapModel;
   getSelectedCell(): GridmapCell | null;
+  setDisabledCells(ids?: Iterable<string>): void;
+  isCellDisabled(idOrCell: string | GridmapCell): boolean;
   focusMap(): boolean;
   focusGroup(idOrGroup: string | GridmapGroup): boolean;
   focusItem(idOrItem: string | GridmapItem): boolean;
