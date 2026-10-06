@@ -168,6 +168,8 @@ export type GridmapTheme = {
   sectionLine: string;
   /** Section labels, for items with no colour. */
   sectionText: string;
+  /** The selected cell is filled in its colour; its mark (number or dot) takes this. Default black. */
+  selectedMark: string;
   font: string;
   /** 0–1: neon bloom on coloured borders, labels, hover and selection, in whatever colours are supplied. 0 turns it off. Default 0. */
   glow: number;

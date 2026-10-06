@@ -15,6 +15,8 @@ const DEFAULT_THEME = {
   layerLine: '#94949a',
   sectionLine: '#3a3a42',
   sectionText: '#6e6e78',
+  // The selected cell is filled in its colour; its mark (number or dot) takes this.
+  selectedMark: '#000000',
   font: 'ui-monospace, "SF Mono", Menlo, Consolas, monospace',
   // 0–1: neon bloom on coloured borders, labels, hover and selection, in
   // whatever colours are supplied. Off by default.
@@ -833,16 +835,15 @@ export class Gridmap {
     ctx.stroke();
 
     const selected = this.state.selected;
-    // Selection is the cell alone, glowing; item borders never change.
+    // Selection is the cell alone, filled and glowing; item borders never change.
     if (selected) {
       const colour = this.colourOf(selected, theme.text);
       ctx.strokeStyle = colour;
       ctx.fillStyle = colour;
-      ctx.globalAlpha = 0.12;
+      ctx.globalAlpha = 1;
       ctx.beginPath();
       rect(selected);
       ctx.fill();
-      ctx.globalAlpha = 1;
       ctx.lineWidth = 1.25;
       ctx.shadowColor = colour;
       ctx.shadowBlur = 12 * glow;
@@ -907,8 +908,11 @@ export class Gridmap {
       ctx.fillStyle = this.colourOf(item, theme.text);
       for (const cell of item.cells) {
         if (!onScreen(cell)) continue;
-        const strong = cell === this.state.hover || cell === this.state.selected;
+        const chosen = cell === this.state.selected;
+        const strong = cell === this.state.hover || chosen;
         ctx.globalAlpha = strong ? 1 : this.options.markOpacity;
+        // On its filled cell the selected mark is dark, so it reads against the colour.
+        ctx.fillStyle = chosen ? theme.selectedMark : this.colourOf(item, theme.text);
         if (useNumbers) {
           const size = this.numberWorldSize(cell) * this.camera.k * damping;
           if (size < 2) continue;
@@ -929,7 +933,7 @@ export class Gridmap {
 
   renderMarkEmphasis(ctx, X, Y, useNumbers, dot) {
     const hover = this.state.hover;
-    if (useNumbers || !hover) return;
+    if (useNumbers || !hover || hover === this.state.selected) return;
     const radius = dot * this.markScale(hover) / 2;
     const colour = this.colourOf(hover, this.options.theme.text);
     ctx.fillStyle = colour;
