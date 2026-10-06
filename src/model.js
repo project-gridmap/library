@@ -240,13 +240,17 @@ export function resolveSections(item) {
 // Cells laid out one section at a time along the item's longer side, inside a
 // padded inner rect: the padding leaves room for section labels to sit on the
 // sections' borders. `gap` (between sections) and `padding` (around them all)
-// are fractions of the item's average cell side. The item's own rect is
+// are fractions of the item's average cell side. `open` keeps the full padding
+// only along the top (see options.sectionFrame). The item's own rect is
 // unchanged; both come out of the cells.
-function layoutSections(cells, sections, rect, gap, padding) {
+function layoutSections(cells, sections, rect, gap, padding, open) {
   const n = cells.length;
   const side = Math.sqrt(rect.width * rect.height / n);
-  const pad = Math.min(Math.max(0, padding) * side, 0.2 * Math.min(rect.width, rect.height));
-  const inner = { x: rect.x + pad, y: rect.y + pad, width: rect.width - 2 * pad, height: rect.height - 2 * pad };
+  const cap = 0.2 * Math.min(rect.width, rect.height);
+  const pad = Math.min(Math.max(0, padding) * side, cap);
+  // An open frame needs the room only along the top, where the labels sit.
+  const edge = open ? 0.25 * pad : pad;
+  const inner = { x: rect.x + edge, y: rect.y + pad, width: rect.width - 2 * edge, height: rect.height - pad - edge };
 
   const horizontal = inner.width >= inner.height;
   const length = horizontal ? inner.width : inner.height;
@@ -343,6 +347,7 @@ export function buildGridmapModel(input, world = DEFAULT_WORLDS.landscape, optio
   const useSections = Boolean(options.sections);
   const sectionGap = Number.isFinite(options.sectionGap) ? options.sectionGap : DEFAULT_SECTION_GAP;
   const sectionPadding = Number.isFinite(options.sectionPadding) ? options.sectionPadding : DEFAULT_SECTION_PADDING;
+  const openFrame = options.sectionFrame === 'open';
   const totalCells = data.layers.reduce((sum, layer) =>
     sum + itemsOf(layer).reduce((itemSum, item) => itemSum + cellCount(item), 0), 0);
   const usableHeight = world.height - world.gutter * (data.layers.length - 1);
@@ -392,15 +397,17 @@ export function buildGridmapModel(input, world = DEFAULT_WORLDS.landscape, optio
         // the inner rect the sections fill, and the padding around it
         inner: null,
         sectionPadding: 0,
+        openFrame: false,
       };
 
       let cellRects;
       if (sectionInputs) {
-        const laid = layoutSections(cells, sectionInputs, rect, sectionGap, sectionPadding);
+        const laid = layoutSections(cells, sectionInputs, rect, sectionGap, sectionPadding, openFrame);
         cellRects = laid.rects;
         item.dividers = laid.dividers;
         item.inner = laid.inner;
         item.sectionPadding = laid.pad;
+        item.openFrame = openFrame;
         sectionInputs.forEach((input, i) => {
           const section = {
             index: model.sections.length,

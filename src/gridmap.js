@@ -45,6 +45,7 @@ const DEFAULT_OPTIONS = {
   showSections: false,
   sectionGap: DEFAULT_SECTION_GAP,
   sectionPadding: DEFAULT_SECTION_PADDING,
+  sectionFrame: 'box',
   // Cells that can't be selected: veiled almost to nothing, and a tap on one
   // shows its labels.disabled message instead of selecting it.
   disabledCells: [],
@@ -210,6 +211,7 @@ export class Gridmap {
         sections: this.options.showSections,
         sectionGap: this.options.sectionGap,
         sectionPadding: this.options.sectionPadding,
+        sectionFrame: this.options.sectionFrame,
       });
       model.layout = name;
       if (ratio) model.fitRatio = ratio;
@@ -330,7 +332,8 @@ export class Gridmap {
     // Sections change the geometry, so models built without them are stale.
     const sectionsChanged = Boolean(before.showSections) !== Boolean(this.options.showSections)
       || (this.options.showSections && (before.sectionGap !== this.options.sectionGap
-        || before.sectionPadding !== this.options.sectionPadding));
+        || before.sectionPadding !== this.options.sectionPadding
+        || before.sectionFrame !== this.options.sectionFrame));
     if (sectionsChanged) this.rebuildModels();
     if (sectionsChanged || 'layout' in config || 'fitRatios' in config) {
       this.useLayout(this.layoutName());
@@ -806,7 +809,12 @@ export class Gridmap {
         if (!item.inner) continue;
         ctx.strokeStyle = this.colourOf(item, theme.sectionLine);
         ctx.beginPath();
-        rect(item.inner);
+        if (item.openFrame) {
+          ctx.moveTo(X(item.inner.x), Y(item.inner.y));
+          ctx.lineTo(X(item.inner.x + item.inner.width), Y(item.inner.y));
+        } else {
+          rect(item.inner);
+        }
         for (const d of item.dividers) {
           ctx.moveTo(X(d.x1), Y(d.y1));
           ctx.lineTo(X(d.x2), Y(d.y2));
@@ -913,15 +921,20 @@ export class Gridmap {
         ctx.globalAlpha = strong ? 1 : this.options.markOpacity;
         // On its filled cell the selected mark is dark, so it reads against the colour.
         ctx.fillStyle = chosen ? theme.selectedMark : this.colourOf(item, theme.text);
-        if (useNumbers) {
+        // A selected dot grows, and becomes its number where the cell is big enough to read one.
+        const room = Math.min(cell.width, cell.height) * this.camera.k;
+        if (chosen && !useNumbers && room >= 14) {
+          ctx.font = `500 ${Math.min(24, room * 0.55)}px ${theme.font}`;
+          ctx.fillText(cell.label, X(cell.centerX), Y(cell.centerY));
+        } else if (useNumbers) {
           const size = this.numberWorldSize(cell) * this.camera.k * damping;
           if (size < 2) continue;
           ctx.font = `${strong ? 500 : 400} ${Math.max(2, Math.min(24, size))}px ${theme.font}`;
           ctx.fillText(cell.label, X(cell.centerX), Y(cell.centerY));
         } else {
-          const radius = dot * this.markScale(cell) / 2;
+          const radius = dot * this.markScale(cell) / 2 + (chosen ? 1.2 : 0);
           ctx.beginPath();
-          ctx.arc(X(cell.centerX), Y(cell.centerY), radius, 0, Math.PI * 2);
+          ctx.arc(X(cell.centerX), Y(cell.centerY), Math.max(chosen ? 2 : 0, radius), 0, Math.PI * 2);
           ctx.fill();
         }
       }
@@ -1053,22 +1066,43 @@ export class Gridmap {
       const item = this.model.items[section.itemIndex];
       if (item.sectionPadding * k < 11) continue;
       const w = section.width * k;
-      // The custom label, else the name with its cell range, shrinking to the name alone, then the short name.
+      // Labels stay within two-thirds of the section's width, so a long one is cut short, not crowding the border.
+      const budget = w * 2 / 3;
+      const fits = (text) => text.length * 5.6 + 14 <= budget;
       const first = item.cells[section.start - 1]?.label ?? section.start;
       const last = item.cells[section.end - 1]?.label ?? section.end;
       const range = section.start === section.end ? `(${first})` : `(${first}-${last})`;
-      const candidates = typeof labelSection === 'function'
-        ? [labelSection(section, this)]
-        : [`${section.label} ${range}`, section.label, section.shortLabel && `${section.shortLabel} ${range}`, section.shortLabel];
-      const text = candidates.filter(Boolean).find((candidate) => candidate.length * 5.6 + 14 <= w);
-      if (!text) continue;
 
-      const el = createElement('div', { text: text.toUpperCase() }, this.overlay);
+      // A custom label, else the name and its range, shrinking to the name alone, the short name, then the name cut short.
+      let name;
+      let tail = '';
+      if (typeof labelSection === 'function') {
+        name = labelSection(section, this);
+        if (!name || !fits(name)) continue;
+      } else if (fits(`${section.label} ${range}`)) {
+        name = section.label;
+        tail = ` ${range}`;
+      } else if (fits(section.label)) {
+        name = section.label;
+      } else if (section.shortLabel && fits(`${section.shortLabel} ${range}`)) {
+        name = section.shortLabel;
+        tail = ` ${range}`;
+      } else if (section.shortLabel && fits(section.shortLabel)) {
+        name = section.shortLabel;
+      } else {
+        const chars = Math.floor((budget - 14) / 5.6) - 1;
+        if (chars < 8) continue;
+        name = `${section.label.slice(0, chars).trimEnd()}…`;
+      }
+
+      // The name leads; the range is dimmer still.
+      const el = createElement('div', { text: name.toUpperCase() }, this.overlay);
+      if (tail) createElement('span', { text: tail, style: 'opacity:0.65' }, el);
       Object.assign(el.style, {
         position: 'absolute',
         left: `${X(section.x) + 5}px`,
         top: `${Y(section.y) - 5}px`,
-        maxWidth: `${Math.max(20, w - 8)}px`,
+        maxWidth: `${Math.max(20, budget)}px`,
         overflow: 'hidden',
         whiteSpace: 'nowrap',
         textOverflow: 'clip',
@@ -1079,7 +1113,7 @@ export class Gridmap {
         fontSize: '7.5px',
         letterSpacing: '0.12em',
         lineHeight: '1.2',
-        opacity: cover?.items.has(section.itemIndex) ? String(faded) : '0.6',
+        opacity: cover?.items.has(section.itemIndex) ? String(faded) : '0.78',
       });
     }
   }

@@ -7,7 +7,7 @@
 <style>
   html, body { margin: 0; height: 100%; background: #000; color: #a3a3ad; font: 12px ui-monospace, Menlo, monospace; }
   #map { position: absolute; inset: 0; }
-  #bar { position: absolute; z-index: 2; top: 8px; right: 8px; display: flex; gap: 14px; align-items: center;
+  #bar { position: absolute; z-index: 2; bottom: 8px; left: 8px; display: flex; gap: 14px; align-items: center;
          padding: 6px 10px; background: rgba(0,0,0,.75); border: 1px solid #2a2a30; border-radius: 6px; }
   #bar label { display: flex; gap: 6px; align-items: center; cursor: pointer; }
   #bar input[type=range] { width: 90px; }
@@ -17,6 +17,7 @@
 <div id="bar">
   <label><input id="sections" type="checkbox" checked> sections</label>
   <label>gap <input id="gap" type="range" min="0" max="1" step="0.05" value="0"></label>
+  <label><input id="open" type="checkbox"> open frame</label>
   <label>padding <input id="pad" type="range" min="0" max="1.5" step="0.05" value="0.6"></label>
 </div>
 <div id="map"></div>
@@ -67,12 +68,14 @@ const map = createGridmap({
   showSections: true,
   sectionGap: 0,
   sectionPadding: 0.6,
+  sectionFrame: 'box',
   theme: { groupLine: '#5a5650', layerLine: '#8f8a81', itemLine: '#5c5c66', sectionLine: '#3a3a42', sectionText: '#6e6e78' },
   labels: { tooltip: (cell) => `${cell.itemLabel} ${cell.label}` },
 });
 window.map = map;
 
 document.getElementById('sections').addEventListener('change', (e) => map.setConfig({ showSections: e.target.checked }));
+document.getElementById('open').addEventListener('change', (e) => map.setConfig({ sectionFrame: e.target.checked ? 'open' : 'box' }));
 document.getElementById('pad').addEventListener('input', (e) => map.setConfig({ sectionPadding: Number(e.target.value) }));
 document.getElementById('gap').addEventListener('input', (e) => map.setConfig({ sectionGap: Number(e.target.value) }));
 </script>

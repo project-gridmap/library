@@ -100,8 +100,10 @@ export type GridmapItem = GridmapRect & {
   dividers: Array<{ x1: number; y1: number; x2: number; y2: number }>;
   /** The padded rect the sections fill (null without sections). Section labels sit on its borders. */
   inner: GridmapRect | null;
-  /** World-unit padding between the item's border and `inner`. */
+  /** World-unit padding between the item's top border and `inner`. */
   sectionPadding: number;
+  /** True when the frame is open: only the top (and the dividers) are drawn. */
+  openFrame: boolean;
 };
 
 export type GridmapSection = GridmapRect & {
@@ -219,6 +221,11 @@ export type GridmapOptions = {
   sectionGap?: number;
   /** Padding inside an item, around its sections, as a fraction of a cell's side. It leaves room for section labels on the borders. Default 0.6. */
   sectionPadding?: number;
+  /**
+   * 'box' (default): a dotted frame around all of an item's sections, evenly padded.
+   * 'open': padding only along the top, where the labels sit, and only the top edge and the dividers are drawn.
+   */
+  sectionFrame?: 'box' | 'open';
   /** Ids of cells that can't be selected: veiled almost to nothing; a tap shows `labels.disabled` instead of selecting. */
   disabledCells?: string[];
   /** 0–1: how much of a disabled cell the background hides. Default 0.9: barely visible. */
@@ -257,7 +264,7 @@ export function normaliseGridmapData(data: GridmapData): GridmapData;
 export function buildGridmapModel(
   data: GridmapData,
   world?: GridmapRect & { gutter?: number },
-  options?: { sections?: boolean; sectionGap?: number; sectionPadding?: number },
+  options?: { sections?: boolean; sectionGap?: number; sectionPadding?: number; sectionFrame?: 'box' | 'open' },
 ): GridmapModel;
 export function validateGridmapModel(model: GridmapModel): true;
 export type GridmapCover = {

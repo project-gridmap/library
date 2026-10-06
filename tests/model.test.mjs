@@ -189,3 +189,25 @@ test('sections touch by default and sit inside the item padding', () => {
   const none = buildGridmapModel(sectioned(12, [{ label: 'One', start: 1, end: 12 }]), fitWorld(1), { sections: true, sectionPadding: 0 });
   assert.equal(none.items[0].sectionPadding, 0);
 });
+
+test('an item with a single section is still framed and labelled', () => {
+  const model = buildGridmapModel(sectioned(12, [{ label: 'All', start: 1, end: 12 }]), fitWorld(1), { sections: true });
+  const item = model.items[0];
+  assert.equal(validateGridmapModel(model), true);
+  assert.equal(model.sections.length, 1);
+  assert.equal(model.sections[0].label, 'All');
+  assert.equal(item.dividers.length, 0);
+  assert.ok(item.inner && item.sectionPadding > 0);
+});
+
+test('an open frame pads the top fully and the other sides lightly', () => {
+  const input = sectioned(12, [{ label: 'One', start: 1, end: 5 }, { label: 'Two', start: 6, end: 12 }]);
+  const boxed = buildGridmapModel(input, fitWorld(1), { sections: true }).items[0];
+  const open = buildGridmapModel(input, fitWorld(1), { sections: true, sectionFrame: 'open' });
+  const item = open.items[0];
+  assert.equal(validateGridmapModel(open), true);
+  assert.ok(item.openFrame);
+  assert.ok(Math.abs(item.inner.y - boxed.inner.y) < 1e-6, 'top padding is unchanged');
+  assert.ok(item.inner.x < boxed.inner.x, 'side padding is lighter');
+  assert.ok(item.inner.y + item.inner.height < item.y + item.height, 'the bottom keeps a little padding');
+});

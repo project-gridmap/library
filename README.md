@@ -116,6 +116,12 @@ default; `sectionGap` (also a fraction of a cell's side) opens a gap between
 them. Both come out of the cells inside the item, never the item itself, so the
 rest of the map stays put. Off, the layout is unchanged.
 
+An item with a single section is framed and labelled like any other, so its
+name still shows. `sectionFrame: 'open'` trims the
+frame to what the labels need: padding along the top only, a dotted top edge,
+and the dividers, without the outline down the sides and along the bottom.
+Labels are kept within two-thirds of their section's width, and cut short with an ellipsis beyond that.
+
 Cells no section claims fall into unlabelled sections, and overlapping or
 out-of-range ranges are dropped or clamped, so no cell is ever lost. Each cell
 carries a `sectionIndex` into `model.sections`.
