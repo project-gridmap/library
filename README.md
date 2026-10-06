@@ -99,3 +99,40 @@ const map = createGridmap({
   onSelectDisabledCell(cell) {},
 });
 ```
+
+## Sections
+
+An item can name runs of its cells with `sections` (1-based, inclusive). Set
+`showSections: true` (or `setConfig({ showSections: true })`) to draw them as
+dotted partitions in the item's colour (`theme.sectionLine` if it has none),
+with small muted labels on their top borders, like the item label on the
+item's, showing the cell range, e.g. "Genealogies (1-9)" (`theme.sectionText`
+if no colour; override the text with `labels.section`).
+
+Sections sit inside padding around the item (`sectionPadding`, a fraction of a
+cell's side, 0.6 by default), which leaves room for the labels; a label shows
+once the padding is deep enough on screen to hold it. Sections touch by
+default; `sectionGap` (also a fraction of a cell's side) opens a gap between
+them. Both come out of the cells inside the item, never the item itself, so the
+rest of the map stays put. Off, the layout is unchanged.
+
+Cells no section claims fall into unlabelled sections, and overlapping or
+out-of-range ranges are dropped or clamped, so no cell is ever lost. Each cell
+carries a `sectionIndex` into `model.sections`.
+
+```js
+const map = createGridmap({
+  // ...
+  showSections: true,
+  data: {
+    layers: [{ groups: [{ items: [{
+      id: 'GEN',
+      cellCount: 50,
+      sections: [
+        { label: 'Creation', start: 1, end: 11 },
+        { label: 'Patriarchs', start: 12, end: 50 },
+      ],
+    }] }] }],
+  },
+});
+```

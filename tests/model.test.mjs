@@ -113,3 +113,79 @@ test('builds a valid model filling every fit world', () => {
     assert.ok(Math.abs(right - world.width) < 1e-6);
   }
 });
+
+const sectioned = (cellCount, sections) => ({
+  layers: [{
+    id: 'l',
+    label: 'L',
+    groups: [{ id: 'g', label: 'G', items: [{ id: 'book', label: 'Book', cellCount, sections }] }],
+  }],
+});
+
+test('sections are off by default and leave the layout unchanged', () => {
+  const input = sectioned(12, [{ label: 'One', start: 1, end: 5 }, { label: 'Two', start: 6, end: 12 }]);
+  const plain = buildGridmapModel(sectioned(12));
+  const off = buildGridmapModel(input);
+  assert.deepEqual(off.cells.map(({ x, y, width, height }) => [x, y, width, height]),
+    plain.cells.map(({ x, y, width, height }) => [x, y, width, height]));
+  assert.equal(off.sections.length, 0);
+});
+
+test('sections partition an item with gaps and dividers', () => {
+  const model = buildGridmapModel(
+    sectioned(12, [{ label: 'One', start: 1, end: 5 }, { label: 'Two', start: 6, end: 12 }]),
+    fitWorld(1),
+    { sections: true, sectionGap: 0.35 },
+  );
+  assert.equal(validateGridmapModel(model), true);
+  const [one, two] = model.sections;
+  assert.deepEqual([one.cellCount, two.cellCount], [5, 7]);
+  assert.equal(model.items[0].dividers.length, 1);
+  assert.equal(model.cells.filter((cell) => cell.sectionIndex === one.index).length, 5);
+  const item = model.items[0];
+  for (const cell of model.cells) {
+    assert.ok(cell.x >= item.x - 1e-6 && cell.x + cell.width <= item.x + item.width + 1e-6);
+    assert.ok(cell.y >= item.y - 1e-6 && cell.y + cell.height <= item.y + item.height + 1e-6);
+  }
+  const apart = one.width > one.height
+    ? two.y - (one.y + one.height)
+    : two.x - (one.x + one.width);
+  assert.ok(apart > 0, 'sections are separated by a gap');
+  const mid = model.cells[0];
+  assert.equal(cellAt(model, mid.centerX, mid.centerY), mid);
+});
+
+test('sections tolerate gaps, overlaps and out-of-range input', () => {
+  const model = buildGridmapModel(
+    sectioned(10, [
+      { label: 'B', start: 4, end: 6 },
+      { label: 'A', start: 2, end: 4 },
+      { label: 'Z', start: 9, end: 40 },
+      { label: 'bad', start: 'x', end: 3 },
+    ]),
+    fitWorld(1),
+    { sections: true },
+  );
+  assert.equal(validateGridmapModel(model), true);
+  assert.deepEqual(model.sections.map((s) => [s.label, s.start, s.end]), [
+    ['', 1, 1], ['A', 2, 4], ['B', 5, 6], ['', 7, 8], ['Z', 9, 10],
+  ]);
+});
+
+test('sections touch by default and sit inside the item padding', () => {
+  const model = buildGridmapModel(
+    sectioned(12, [{ label: 'One', start: 1, end: 5 }, { label: 'Two', start: 6, end: 12 }]),
+    fitWorld(1),
+    { sections: true },
+  );
+  const [one, two] = model.sections;
+  const item = model.items[0];
+  const apart = one.width > one.height ? two.y - (one.y + one.height) : two.x - (one.x + one.width);
+  assert.ok(Math.abs(apart) < 1e-6, 'sections touch');
+  assert.ok(item.sectionPadding > 0);
+  assert.ok(Math.abs(one.x - (item.x + item.sectionPadding)) < 1e-6);
+  assert.ok(Math.abs(one.y - (item.y + item.sectionPadding)) < 1e-6);
+  assert.ok(Math.abs(item.inner.width - (item.width - 2 * item.sectionPadding)) < 1e-6);
+  const none = buildGridmapModel(sectioned(12, [{ label: 'One', start: 1, end: 12 }]), fitWorld(1), { sections: true, sectionPadding: 0 });
+  assert.equal(none.items[0].sectionPadding, 0);
+});

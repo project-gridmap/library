@@ -5,8 +5,19 @@ export type GridmapCellInput = {
   meta?: Record<string, unknown>;
 };
 
+/** A named run of an item's cells, 1-based and inclusive. Shown when `showSections` is on. */
+export type GridmapSectionInput = {
+  label?: string;
+  name?: string;
+  shortLabel?: string;
+  start: number;
+  end: number;
+};
+
 export type GridmapItemInput = {
   id?: string;
+  /** Optional named runs of cells. Gaps are filled with unlabelled sections; overlaps and out-of-range values are dropped or clamped. */
+  sections?: GridmapSectionInput[];
   key?: string;
   label?: string;
   name?: string;
@@ -63,6 +74,8 @@ export type GridmapCell = GridmapRect & {
   itemShortLabel: string;
   itemIndex: number;
   ordinal: number;
+  /** Index into model.sections, or -1 when sections are off. */
+  sectionIndex: number;
   centerX: number;
   centerY: number;
 };
@@ -81,6 +94,28 @@ export type GridmapItem = GridmapRect & {
   groupIndex: number;
   cellCount: number;
   cells: GridmapCell[];
+  /** Empty unless sections are on and the item has some. */
+  sections: GridmapSection[];
+  /** Lines midway between neighbouring sections, for drawing partitions. */
+  dividers: Array<{ x1: number; y1: number; x2: number; y2: number }>;
+  /** The padded rect the sections fill (null without sections). Section labels sit on its borders. */
+  inner: GridmapRect | null;
+  /** World-unit padding between the item's border and `inner`. */
+  sectionPadding: number;
+};
+
+export type GridmapSection = GridmapRect & {
+  index: number;
+  uid: string;
+  /** Empty for the unlabelled filler between named sections. */
+  label: string;
+  shortLabel: string | null;
+  start: number;
+  end: number;
+  itemId: string;
+  itemIndex: number;
+  layerIndex: number;
+  cellCount: number;
 };
 
 export type GridmapGroup = {
@@ -116,6 +151,7 @@ export type GridmapModel = {
   layers: GridmapLayer[];
   groups: GridmapGroup[];
   items: GridmapItem[];
+  sections: GridmapSection[];
   cells: GridmapCell[];
 };
 
@@ -128,6 +164,10 @@ export type GridmapTheme = {
   itemLine: string;
   groupLine: string;
   layerLine: string;
+  /** Partitions between an item's sections, for items with no colour. */
+  sectionLine: string;
+  /** Section labels, for items with no colour. */
+  sectionText: string;
   font: string;
   /** 0–1: neon bloom on coloured borders, labels, hover and selection, in whatever colours are supplied. 0 turns it off. Default 0. */
   glow: number;
@@ -171,6 +211,12 @@ export type GridmapOptions = {
   numberMinPx?: number;
   itemLabels?: 'short' | 'full';
   history?: boolean;
+  /** Show each item's `sections`: dotted partitions in the item's colour, with small labels on their borders. Default false. */
+  showSections?: boolean;
+  /** Gap between sections as a fraction of a cell's side. Default 0: sections touch. */
+  sectionGap?: number;
+  /** Padding inside an item, around its sections, as a fraction of a cell's side. It leaves room for section labels on the borders. Default 0.6. */
+  sectionPadding?: number;
   /** Ids of cells that can't be selected: veiled almost to nothing; a tap shows `labels.disabled` instead of selecting. */
   disabledCells?: string[];
   /** 0–1: how much of a disabled cell the background hides. Default 0.9: barely visible. */
@@ -178,6 +224,8 @@ export type GridmapOptions = {
   theme?: Partial<GridmapTheme>;
   labels?: {
     item?: (item: GridmapItem, map: Gridmap) => string;
+    /** Text for a named section's label. Defaults to the name and its cell range, e.g. "Genealogies (1-9)". */
+    section?: (section: GridmapSection, map: Gridmap) => string;
     tooltip?: (cell: GridmapCell, map: Gridmap) => string;
     /** The message for a disabled cell, shown on hover and when tapped (defaults to the tooltip). */
     disabled?: (cell: GridmapCell, map: Gridmap) => string;
@@ -193,14 +241,22 @@ export type GridmapOptions = {
 
 export const DEFAULT_WORLDS: Record<string, GridmapRect & { gutter: number }>;
 export const DEFAULT_FIT_RATIOS: number[];
+export const DEFAULT_SECTION_GAP: number;
+export const DEFAULT_SECTION_PADDING: number;
 
 /** The ratio nearest `aspect` (log scale), keeping `current` unless another is nearer by more than `slack`. */
 export function pickFitRatio(aspect: number, ratios?: number[], current?: number | null, slack?: number): number;
 /** A world of the given width / height ratio, for buildGridmapModel. */
 export function fitWorld(ratio: number, gutter?: number): GridmapRect & { gutter: number };
 
+/** An item's sections as a full ordered partition of its cells, or null if it has none. */
+export function resolveSections(item: { cells: unknown[]; sections?: GridmapSectionInput[] }): Array<Required<Pick<GridmapSectionInput, 'start' | 'end'>> & { label: string; shortLabel: string | null }> | null;
 export function normaliseGridmapData(data: GridmapData): GridmapData;
-export function buildGridmapModel(data: GridmapData, world?: GridmapRect & { gutter?: number }): GridmapModel;
+export function buildGridmapModel(
+  data: GridmapData,
+  world?: GridmapRect & { gutter?: number },
+  options?: { sections?: boolean; sectionGap?: number; sectionPadding?: number },
+): GridmapModel;
 export function validateGridmapModel(model: GridmapModel): true;
 export type GridmapCover = {
   rects: Array<GridmapItem | GridmapCell>;

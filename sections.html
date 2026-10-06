@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Gridmap sections</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #000; color: #a3a3ad; font: 12px ui-monospace, Menlo, monospace; }
+  #map { position: absolute; inset: 0; }
+  #bar { position: absolute; z-index: 2; top: 8px; right: 8px; display: flex; gap: 14px; align-items: center;
+         padding: 6px 10px; background: rgba(0,0,0,.75); border: 1px solid #2a2a30; border-radius: 6px; }
+  #bar label { display: flex; gap: 6px; align-items: center; cursor: pointer; }
+  #bar input[type=range] { width: 90px; }
+</style>
+</head>
+<body>
+<div id="bar">
+  <label><input id="sections" type="checkbox" checked> sections</label>
+  <label>gap <input id="gap" type="range" min="0" max="1" step="0.05" value="0"></label>
+  <label>padding <input id="pad" type="range" min="0" max="1.5" step="0.05" value="0.6"></label>
+</div>
+<div id="map"></div>
+<script type="module">
+// Manual test page for showSections. Uses ../src directly, so it needs a
+// local server (ES modules + fetch):  npx serve .   or   python3 -m http.server
+import { createGridmap } from './src/index.js';
+
+const slug = (s) => s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+const load = (url) => fetch(url).then((r) => { if (!r.ok) throw new Error(`${url}: ${r.status}`); return r.json(); });
+const [bible, colours, groups] = await Promise.all([load('bible.json'), load('colours.json'), load('groups.json')]);
+
+// groups.json is keyed by lower-case book name; the Bible data spells one differently.
+const ALIASES = { matthew: 'mathew' };
+const sectionsFor = (name) => {
+  const key = name.toLowerCase();
+  return (groups[key] ?? groups[ALIASES[key]])?.map(({ name: label, start, end }) => ({ label, start, end }));
+};
+
+const data = {
+  layers: bible.testaments.map((t) => ({
+    id: slug(t.name),
+    label: `${t.name} Testament`,
+    groups: t.divisions.map((d) => ({
+      id: slug(d.name),
+      label: d.name,
+      items: d.books.map((b) => ({
+        id: b.key,
+        label: b.name,
+        shortLabel: b.key,
+        sections: sectionsFor(b.name),
+        cells: Array.from({ length: b.chapters }, (_, i) => ({
+          id: `${b.key}/${i + 1}`,
+          label: String(i + 1),
+          value: Number(b.verses?.[i]) || null,
+        })),
+      })),
+    })),
+  })),
+};
+
+const map = createGridmap({
+  container: document.getElementById('map'),
+  data,
+  colours,
+  layout: 'fit',
+  itemLabels: 'full',
+  showSections: true,
+  sectionGap: 0,
+  sectionPadding: 0.6,
+  theme: { groupLine: '#5a5650', layerLine: '#8f8a81', itemLine: '#5c5c66', sectionLine: '#3a3a42', sectionText: '#6e6e78' },
+  labels: { tooltip: (cell) => `${cell.itemLabel} ${cell.label}` },
+});
+window.map = map;
+
+document.getElementById('sections').addEventListener('change', (e) => map.setConfig({ showSections: e.target.checked }));
+document.getElementById('pad').addEventListener('input', (e) => map.setConfig({ sectionPadding: Number(e.target.value) }));
+document.getElementById('gap').addEventListener('input', (e) => map.setConfig({ sectionGap: Number(e.target.value) }));
+</script>
+</body>
+</html>

@@ -1,7 +1,7 @@
 'use strict';
 
 import {
-  DEFAULT_FIT_RATIOS, DEFAULT_WORLDS, buildGridmapModel, cellAt, coverCells, fitWorld, normaliseGridmapData, pickFitRatio,
+  DEFAULT_FIT_RATIOS, DEFAULT_SECTION_GAP, DEFAULT_SECTION_PADDING, DEFAULT_WORLDS, buildGridmapModel, cellAt, coverCells, fitWorld, normaliseGridmapData, pickFitRatio,
 } from './model.js';
 
 const DEFAULT_THEME = {
@@ -13,6 +13,8 @@ const DEFAULT_THEME = {
   itemLine: '#94949a',
   groupLine: '#94949a',
   layerLine: '#94949a',
+  sectionLine: '#3a3a42',
+  sectionText: '#6e6e78',
   font: 'ui-monospace, "SF Mono", Menlo, Consolas, monospace',
   // 0–1: neon bloom on coloured borders, labels, hover and selection, in
   // whatever colours are supplied. Off by default.
@@ -35,6 +37,12 @@ const DEFAULT_OPTIONS = {
   numberMinPx: 8,
   itemLabels: 'short',
   history: false,
+  // Items' `sections`: dotted partitions in the item's colour, with small
+  // labels on their borders. The gap between sections and the padding around
+  // them (fractions of a cell's side) reshape the layout. Off by default.
+  showSections: false,
+  sectionGap: DEFAULT_SECTION_GAP,
+  sectionPadding: DEFAULT_SECTION_PADDING,
   // Cells that can't be selected: veiled almost to nothing, and a tap on one
   // shows its labels.disabled message instead of selecting it.
   disabledCells: [],
@@ -196,7 +204,11 @@ export class Gridmap {
       const world = ratio ? fitWorld(ratio) : this.options.worlds[name];
       const fallback = Object.keys(this.options.worlds)[0];
       if (!world) return name === fallback ? null : this.modelFor(fallback);
-      const model = buildGridmapModel(this.data, world);
+      const model = buildGridmapModel(this.data, world, {
+        sections: this.options.showSections,
+        sectionGap: this.options.sectionGap,
+        sectionPadding: this.options.sectionPadding,
+      });
       model.layout = name;
       if (ratio) model.fitRatio = ratio;
       this.models[name] = model;
@@ -310,9 +322,15 @@ export class Gridmap {
   }
 
   setConfig(config = {}) {
+    const before = this.options;
     this.options = mergeOptions({ ...this.options, ...config });
     if (config.disabledCells) this.setDisabledCells(config.disabledCells);
-    if ('layout' in config || 'fitRatios' in config) {
+    // Sections change the geometry, so models built without them are stale.
+    const sectionsChanged = Boolean(before.showSections) !== Boolean(this.options.showSections)
+      || (this.options.showSections && (before.sectionGap !== this.options.sectionGap
+        || before.sectionPadding !== this.options.sectionPadding));
+    if (sectionsChanged) this.rebuildModels();
+    if (sectionsChanged || 'layout' in config || 'fitRatios' in config) {
       this.useLayout(this.layoutName());
       return;
     }
@@ -775,6 +793,27 @@ export class Gridmap {
       ctx.stroke();
     }
 
+    // Section partitions: dotted, in the item's colour, fading in as cells grow big enough to read.
+    const sectionAlpha = this.options.showSections
+      ? Math.min(1, Math.max(0, (this.model.cellSide * k - 3) / 6))
+      : 0;
+    if (sectionAlpha > 0) {
+      ctx.globalAlpha = sectionAlpha * 0.8;
+      ctx.setLineDash([1.5, 3]);
+      for (const item of visibleItems) {
+        if (!item.inner) continue;
+        ctx.strokeStyle = this.colourOf(item, theme.sectionLine);
+        ctx.beginPath();
+        rect(item.inner);
+        for (const d of item.dividers) {
+          ctx.moveTo(X(d.x1), Y(d.y1));
+          ctx.lineTo(X(d.x2), Y(d.y2));
+        }
+        ctx.stroke();
+      }
+      ctx.setLineDash([]);
+    }
+
     ctx.globalAlpha = 1;
     ctx.strokeStyle = theme.groupLine;
     ctx.lineWidth = 1.25;
@@ -992,6 +1031,51 @@ export class Gridmap {
         lineHeight: '1.33',
         opacity: cover?.items.has(item.index) ? String(faded)
           : selected?.itemIndex === item.index || hover?.itemIndex === item.index ? '1' : '0.88',
+      });
+    }
+
+    if (this.options.showSections) this.renderSectionLabels(X, Y, cover, faded);
+  }
+
+  // Small labels on each named section's top border, like the item label on
+  // the item's: in the item's colour, muted. They sit in the item's padding,
+  // so they show only once the padding is deep enough to hold one clear of
+  // the item label, and where the text fits.
+  renderSectionLabels(X, Y, cover, faded) {
+    const k = this.camera.k;
+    const labelSection = this.options.labels.section;
+    for (const section of this.model.sections) {
+      if (!section.label) continue;
+      const item = this.model.items[section.itemIndex];
+      if (item.sectionPadding * k < 11) continue;
+      const w = section.width * k;
+      // The custom label, else the name with its cell range, shrinking to the name alone, then the short name.
+      const first = item.cells[section.start - 1]?.label ?? section.start;
+      const last = item.cells[section.end - 1]?.label ?? section.end;
+      const range = section.start === section.end ? `(${first})` : `(${first}-${last})`;
+      const candidates = typeof labelSection === 'function'
+        ? [labelSection(section, this)]
+        : [`${section.label} ${range}`, section.label, section.shortLabel && `${section.shortLabel} ${range}`, section.shortLabel];
+      const text = candidates.filter(Boolean).find((candidate) => candidate.length * 5.6 + 14 <= w);
+      if (!text) continue;
+
+      const el = createElement('div', { text: text.toUpperCase() }, this.overlay);
+      Object.assign(el.style, {
+        position: 'absolute',
+        left: `${X(section.x) + 5}px`,
+        top: `${Y(section.y) - 5}px`,
+        maxWidth: `${Math.max(20, w - 8)}px`,
+        overflow: 'hidden',
+        whiteSpace: 'nowrap',
+        textOverflow: 'clip',
+        pointerEvents: 'none',
+        color: this.colourOf(item, this.options.theme.sectionText),
+        background: this.options.theme.background,
+        padding: '0 3px',
+        fontSize: '7.5px',
+        letterSpacing: '0.12em',
+        lineHeight: '1.2',
+        opacity: cover?.items.has(section.itemIndex) ? String(faded) : '0.6',
       });
     }
   }

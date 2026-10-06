@@ -25,6 +25,9 @@ export function fitWorld(ratio, gutter = 30) {
   return { x: 0, y: 0, width: 1000, height: 1000 / ratio, gutter };
 }
 
+export const DEFAULT_SECTION_GAP = 0;
+export const DEFAULT_SECTION_PADDING = 0.6;
+
 const EPS = 1e-6;
 const near = (a, b) => Math.abs(a - b) < EPS;
 const slug = (s) => String(s).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
@@ -203,6 +206,79 @@ function layoutCells(cells, x, y, width, height) {
   return regions;
 }
 
+// An item's sections as a full, ordered partition of its cells (1-based,
+// inclusive). Out-of-range and overlapping input is clamped or dropped, and
+// cells no section claims fall into unlabelled sections, so layout never
+// loses a cell. Null when the item has none.
+export function resolveSections(item) {
+  const n = item.cells.length;
+  const input = Array.isArray(item.sections) ? item.sections : [];
+  const valid = input
+    .map((section) => ({
+      label: String(section?.label ?? section?.name ?? ''),
+      shortLabel: section?.shortLabel != null ? String(section.shortLabel) : null,
+      start: Math.max(1, Math.floor(Number(section?.start))),
+      end: Math.min(n, Math.floor(Number(section?.end ?? section?.start))),
+    }))
+    .filter((section) => Number.isFinite(section.start) && Number.isFinite(section.end) && section.start <= section.end)
+    .sort((a, b) => a.start - b.start);
+  if (!valid.length) return null;
+
+  const resolved = [];
+  let next = 1;
+  for (const section of valid) {
+    if (section.end < next) continue;
+    const start = Math.max(section.start, next);
+    if (start > next) resolved.push({ label: '', shortLabel: null, start: next, end: start - 1 });
+    resolved.push({ ...section, start });
+    next = section.end + 1;
+  }
+  if (next <= n) resolved.push({ label: '', shortLabel: null, start: next, end: n });
+  return resolved;
+}
+
+// Cells laid out one section at a time along the item's longer side, inside a
+// padded inner rect: the padding leaves room for section labels to sit on the
+// sections' borders. `gap` (between sections) and `padding` (around them all)
+// are fractions of the item's average cell side. The item's own rect is
+// unchanged; both come out of the cells.
+function layoutSections(cells, sections, rect, gap, padding) {
+  const n = cells.length;
+  const side = Math.sqrt(rect.width * rect.height / n);
+  const pad = Math.min(Math.max(0, padding) * side, 0.2 * Math.min(rect.width, rect.height));
+  const inner = { x: rect.x + pad, y: rect.y + pad, width: rect.width - 2 * pad, height: rect.height - 2 * pad };
+
+  const horizontal = inner.width >= inner.height;
+  const length = horizontal ? inner.width : inner.height;
+  const gutter = sections.length > 1
+    ? Math.min(Math.max(0, gap) * side, length * 0.5 / (sections.length - 1))
+    : 0;
+  const usable = length - gutter * (sections.length - 1);
+
+  const rects = [];
+  const dividers = [];
+  const placed = [];
+  let pos = 0;
+  sections.forEach((section, i) => {
+    const count = section.end - section.start + 1;
+    const size = usable * count / n;
+    const box = horizontal
+      ? { x: inner.x + pos, y: inner.y, width: size, height: inner.height }
+      : { x: inner.x, y: inner.y + pos, width: inner.width, height: size };
+    rects.push(...layoutCells(cells.slice(section.start - 1, section.end), box.x, box.y, box.width, box.height));
+    placed.push(box);
+    pos += size;
+    if (i < sections.length - 1) {
+      const mid = pos + gutter / 2;
+      dividers.push(horizontal
+        ? { x1: inner.x + mid, y1: inner.y, x2: inner.x + mid, y2: inner.y + inner.height }
+        : { x1: inner.x, y1: inner.y + mid, x2: inner.x + inner.width, y2: inner.y + mid });
+      pos += gutter;
+    }
+  });
+  return { rects, dividers, placed, inner, pad };
+}
+
 function boundsOf(rects) {
   const x = Math.min(...rects.map((r) => r.x));
   const y = Math.min(...rects.map((r) => r.y));
@@ -259,13 +335,19 @@ function onPerimeter(segment, rect) {
     : near(segment.x1, rect.x) || near(segment.x1, rect.x + rect.width);
 }
 
-export function buildGridmapModel(input, world = DEFAULT_WORLDS.landscape) {
+// options.sections turns item sections on. options.sectionGap (between
+// sections) and options.sectionPadding (around them, inside the item) are
+// fractions of a cell's side. Off, the layout is unchanged.
+export function buildGridmapModel(input, world = DEFAULT_WORLDS.landscape, options = {}) {
   const data = normaliseGridmapData(input);
+  const useSections = Boolean(options.sections);
+  const sectionGap = Number.isFinite(options.sectionGap) ? options.sectionGap : DEFAULT_SECTION_GAP;
+  const sectionPadding = Number.isFinite(options.sectionPadding) ? options.sectionPadding : DEFAULT_SECTION_PADDING;
   const totalCells = data.layers.reduce((sum, layer) =>
     sum + itemsOf(layer).reduce((itemSum, item) => itemSum + cellCount(item), 0), 0);
   const usableHeight = world.height - world.gutter * (data.layers.length - 1);
 
-  const model = { data, world: { ...world }, layers: [], groups: [], items: [], cells: [] };
+  const model = { data, world: { ...world }, layers: [], groups: [], items: [], sections: [], cells: [] };
   let layerY = world.y;
 
   data.layers.forEach((layerInput, layerIndex) => {
@@ -289,6 +371,7 @@ export function buildGridmapModel(input, world = DEFAULT_WORLDS.landscape) {
 
     for (const region of partitionItems(sourceItems, layerRect).regions) {
       const { id, label, shortLabel, cells, groupId, groupLabel, groupMeta, meta, rect } = region;
+      const sectionInputs = useSections ? resolveSections(region) : null;
       const item = {
         index: model.items.length,
         id,
@@ -304,10 +387,44 @@ export function buildGridmapModel(input, world = DEFAULT_WORLDS.landscape) {
         cellCount: cells.length,
         ...rect,
         cells: [],
+        sections: [],
+        dividers: [],
+        // the inner rect the sections fill, and the padding around it
+        inner: null,
+        sectionPadding: 0,
       };
 
-      layoutCells(cells, rect.x, rect.y, rect.width, rect.height).forEach((cellRect, cellIndex) => {
+      let cellRects;
+      if (sectionInputs) {
+        const laid = layoutSections(cells, sectionInputs, rect, sectionGap, sectionPadding);
+        cellRects = laid.rects;
+        item.dividers = laid.dividers;
+        item.inner = laid.inner;
+        item.sectionPadding = laid.pad;
+        sectionInputs.forEach((input, i) => {
+          const section = {
+            index: model.sections.length,
+            uid: `${item.id}/${i + 1}`,
+            label: input.label,
+            shortLabel: input.shortLabel,
+            start: input.start,
+            end: input.end,
+            itemId: item.id,
+            itemIndex: item.index,
+            layerIndex: layer.index,
+            cellCount: input.end - input.start + 1,
+            ...laid.placed[i],
+          };
+          item.sections.push(section);
+          model.sections.push(section);
+        });
+      } else {
+        cellRects = layoutCells(cells, rect.x, rect.y, rect.width, rect.height);
+      }
+
+      cellRects.forEach((cellRect, cellIndex) => {
         const source = cells[cellIndex];
+        const section = item.sections.find((s) => cellIndex + 1 >= s.start && cellIndex + 1 <= s.end);
         const cell = {
           index: model.cells.length,
           id: source.id,
@@ -325,6 +442,7 @@ export function buildGridmapModel(input, world = DEFAULT_WORLDS.landscape) {
           itemShortLabel: item.shortLabel,
           itemIndex: item.index,
           ordinal: cellIndex + 1,
+          sectionIndex: section ? section.index : -1,
           ...cellRect,
           centerX: cellRect.x + cellRect.width / 2,
           centerY: cellRect.y + cellRect.height / 2,
@@ -411,6 +529,14 @@ export function validateGridmapModel(model) {
   }
   if (!model.cells.every((cell) => model.items[cell.itemIndex]?.cells.includes(cell))) {
     throw new Error('each cell must belong to exactly one item');
+  }
+  for (const item of model.items) {
+    if (!item.sections.length) continue;
+    const claimed = item.sections.reduce((sum, section) => sum + section.cellCount, 0);
+    if (claimed !== item.cells.length) throw new Error('item sections must cover each cell exactly once');
+    if (!item.cells.every((cell) => model.sections[cell.sectionIndex]?.itemIndex === item.index)) {
+      throw new Error('each cell must belong to a section of its own item');
+    }
   }
   return true;
 }
