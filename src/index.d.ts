@@ -226,6 +226,8 @@ export type GridmapOptions = {
    * 'open': padding only along the top, where the labels sit, and only the top edge and the dividers are drawn.
    */
   sectionFrame?: 'box' | 'open';
+  /** Font size of section labels in px. Default 7.5. Larger labels need deeper `sectionPadding` on screen before they show. */
+  sectionLabelSize?: number;
   /** Ids of cells that can't be selected: veiled almost to nothing; a tap shows `labels.disabled` instead of selecting. */
   disabledCells?: string[];
   /** 0–1: how much of a disabled cell the background hides. Default 0.9: barely visible. */

@@ -46,6 +46,9 @@ const DEFAULT_OPTIONS = {
   sectionGap: DEFAULT_SECTION_GAP,
   sectionPadding: DEFAULT_SECTION_PADDING,
   sectionFrame: 'box',
+  // Section labels' font size in px. Larger labels need deeper padding before
+  // they show, and take more of their section's width.
+  sectionLabelSize: 7.5,
   // Cells that can't be selected: veiled almost to nothing, and a tap on one
   // shows its labels.disabled message instead of selecting it.
   disabledCells: [],
@@ -1061,14 +1064,17 @@ export class Gridmap {
   renderSectionLabels(X, Y, cover, faded) {
     const k = this.camera.k;
     const labelSection = this.options.labels.section;
+    // Measures below were tuned at 7.5px and scale with the size.
+    const size = Number(this.options.sectionLabelSize) || 7.5;
+    const charWidth = size * 5.6 / 7.5;
     for (const section of this.model.sections) {
       if (!section.label) continue;
       const item = this.model.items[section.itemIndex];
-      if (item.sectionPadding * k < 11) continue;
+      if (item.sectionPadding * k < size * 1.2 + 2) continue;
       const w = section.width * k;
       // Labels stay within two-thirds of the section's width, so a long one is cut short, not crowding the border.
       const budget = w * 2 / 3;
-      const fits = (text) => text.length * 5.6 + 14 <= budget;
+      const fits = (text) => text.length * charWidth + 14 <= budget;
       const first = item.cells[section.start - 1]?.label ?? section.start;
       const last = item.cells[section.end - 1]?.label ?? section.end;
       const range = section.start === section.end ? `(${first})` : `(${first}-${last})`;
@@ -1090,7 +1096,7 @@ export class Gridmap {
       } else if (section.shortLabel && fits(section.shortLabel)) {
         name = section.shortLabel;
       } else {
-        const chars = Math.floor((budget - 14) / 5.6) - 1;
+        const chars = Math.floor((budget - 14) / charWidth) - 1;
         if (chars < 8) continue;
         name = `${section.label.slice(0, chars).trimEnd()}…`;
       }
@@ -1101,7 +1107,7 @@ export class Gridmap {
       Object.assign(el.style, {
         position: 'absolute',
         left: `${X(section.x) + 5}px`,
-        top: `${Y(section.y) - 5}px`,
+        top: `${Y(section.y) - size * 0.6 - 0.5}px`,
         maxWidth: `${Math.max(20, budget)}px`,
         overflow: 'hidden',
         whiteSpace: 'nowrap',
@@ -1110,7 +1116,7 @@ export class Gridmap {
         color: this.colourOf(item, this.options.theme.sectionText),
         background: this.options.theme.background,
         padding: '0 3px',
-        fontSize: '7.5px',
+        fontSize: `${size}px`,
         letterSpacing: '0.12em',
         lineHeight: '1.2',
         opacity: cover?.items.has(section.itemIndex) ? String(faded) : '0.78',

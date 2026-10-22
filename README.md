@@ -121,6 +121,8 @@ name still shows. `sectionFrame: 'open'` trims the
 frame to what the labels need: padding along the top only, a dotted top edge,
 and the dividers, without the outline down the sides and along the bottom.
 Labels are kept within two-thirds of their section's width, and cut short with an ellipsis beyond that.
+`sectionLabelSize` sets their font size in px (default 7.5); larger labels need
+deeper padding on screen before they show, so raise `sectionPadding` with it.
 
 Cells no section claims fall into unlabelled sections, and overlapping or
 out-of-range ranges are dropped or clamped, so no cell is ever lost. Each cell
