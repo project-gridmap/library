@@ -17,7 +17,12 @@ const DEFAULT_THEME = {
   sectionText: '#6e6e78',
   // The selected cell is filled in its colour; its mark (number or dot) takes this.
   selectedMark: '#000000',
-  font: 'ui-monospace, "SF Mono", Menlo, Consolas, monospace',
+  // IBM Plex Mono when the page loads it (even widths keep labels and numbers aligned), else the system monospace
+  font: '"IBM Plex Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace',
+  // Item and section labels. Plex Mono Medium holds up at small sizes on a dark ground.
+  labelWeight: 500,
+  // Behind labels; defaults to the background. On a transparent background, labels cut the lines behind them instead.
+  labelBackground: null,
   // 0–1: neon bloom on coloured borders, labels, hover and selection, in
   // whatever colours are supplied. Off by default.
   glow: 0,
@@ -34,6 +39,11 @@ const DEFAULT_OPTIONS = {
   showMarks: true,
   markType: 'number',
   markOpacity: 0.75,
+  // Which parts take the item colours, and how strongly: { coloured, opacity } for borders, sections, marks and
+  // labels. Uncoloured parts use the theme's neutral colours. A map is calmer with colour on borders and labels only.
+  colourParts: {},
+  // Colours for the selected cell, keyed like `colours` (e.g. a brighter tier than the map's own), else its colour.
+  selectedColours: {},
   relativeMarkSize: true,
   markMaxSize: 0.4,
   numberMinPx: 8,
@@ -378,6 +388,34 @@ export class Gridmap {
       : this.options.colourBy === 'cell' ? entity.id
       : entity.itemId ?? entity.id;
     return this.options.colours?.[key] ?? fallback;
+  }
+
+  part(name) {
+    const part = this.options.colourParts?.[name] ?? {};
+    return { coloured: part.coloured ?? true, opacity: part.opacity };
+  }
+
+  partColour(name, entity, neutral) {
+    return this.part(name).coloured ? this.colourOf(entity, neutral) : neutral;
+  }
+
+  selectedColourOf(entity) {
+    const key = this.options.colourBy === 'group' ? entity.groupId
+      : this.options.colourBy === 'layer' ? entity.layerId
+      : this.options.colourBy === 'cell' ? entity.id
+      : entity.itemId ?? entity.id;
+    return this.options.selectedColours?.[key] ?? this.colourOf(entity, this.options.theme.text);
+  }
+
+  // A transparent background: the page shows through, so fading means erasing rather than painting the background on
+  transparent() {
+    const bg = String(this.options.theme.background ?? '').replace(/\s/g, '').toLowerCase();
+    return bg === 'transparent' || /^rgba\(.*,0(\.0*)?\)$/.test(bg) || /^#[0-9a-f]{6}00$/.test(bg) || /^#[0-9a-f]{3}0$/.test(bg);
+  }
+
+  labelBackground() {
+    const theme = this.options.theme;
+    return theme.labelBackground ?? (this.transparent() ? 'transparent' : theme.background);
   }
 
   glow() {
@@ -771,7 +809,7 @@ export class Gridmap {
 
     // Neon: a soft wide stroke under each coloured border, one path per colour.
     const glow = this.glow();
-    if (glow > 0) {
+    if (glow > 0 && this.part('borders').coloured) {
       const blooms = new Map();
       for (const item of visibleItems) {
         const colour = this.colourOf(item, null);
@@ -793,9 +831,9 @@ export class Gridmap {
       ctx.lineWidth = 1;
     }
 
-    ctx.globalAlpha = 1;
+    ctx.globalAlpha = this.part('borders').opacity ?? 1;
     for (const item of visibleItems) {
-      ctx.strokeStyle = this.colourOf(item, theme.itemLine);
+      ctx.strokeStyle = this.partColour('borders', item, theme.itemLine);
       ctx.beginPath();
       rect(item);
       ctx.stroke();
@@ -806,11 +844,11 @@ export class Gridmap {
       ? Math.min(1, Math.max(0, (this.model.cellSide * k - 3) / 6))
       : 0;
     if (sectionAlpha > 0) {
-      ctx.globalAlpha = sectionAlpha * 0.8;
+      ctx.globalAlpha = sectionAlpha * (this.part('sections').opacity ?? 0.8);
       ctx.setLineDash([1.5, 3]);
       for (const item of visibleItems) {
         if (!item.inner) continue;
-        ctx.strokeStyle = this.colourOf(item, theme.sectionLine);
+        ctx.strokeStyle = this.partColour('sections', item, theme.sectionLine);
         ctx.beginPath();
         if (item.openFrame) {
           ctx.moveTo(X(item.inner.x), Y(item.inner.y));
@@ -848,7 +886,7 @@ export class Gridmap {
     const selected = this.state.selected;
     // Selection is the cell alone, filled and glowing; item borders never change.
     if (selected) {
-      const colour = this.colourOf(selected, theme.text);
+      const colour = this.selectedColourOf(selected);
       ctx.strokeStyle = colour;
       ctx.fillStyle = colour;
       ctx.globalAlpha = 1;
@@ -881,6 +919,24 @@ export class Gridmap {
 
     this.renderVeil(ctx, rect);
     this.renderLabels(X, Y);
+    if (this.labelBackground() === 'transparent') this.cutBehindLabels(ctx);
+  }
+
+  // On a transparent background a label box would show on the page, so each label cuts the lines behind it instead
+  cutBehindLabels(ctx) {
+    const labels = [...this.overlay.children].filter((el) => el.style.display !== 'none' && el.textContent);
+    if (!labels.length) return;
+    // measured on screen, so undo any scale an ancestor applies (a CSS transform) to get back to canvas pixels
+    const origin = this.canvas.getBoundingClientRect();
+    const sx = origin.width / (this.canvas.clientWidth || origin.width) || 1;
+    const sy = origin.height / (this.canvas.clientHeight || origin.height) || 1;
+    ctx.save();
+    ctx.setTransform(this.dpr || 1, 0, 0, this.dpr || 1, 0, 0);
+    for (const el of labels) {
+      const r = el.getBoundingClientRect();
+      ctx.clearRect((r.left - origin.left) / sx, (r.top - origin.top) / sy, r.width / sx, r.height / sy);
+    }
+    ctx.restore();
   }
 
   markScale(cell, floor = 0.4) {
@@ -915,15 +971,16 @@ export class Gridmap {
 
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
+    const markOpacity = this.part('marks').opacity ?? this.options.markOpacity;
     for (const item of this.model.items) {
-      ctx.fillStyle = this.colourOf(item, theme.text);
+      ctx.fillStyle = this.partColour('marks', item, theme.text);
       for (const cell of item.cells) {
         if (!onScreen(cell)) continue;
         const chosen = cell === this.state.selected;
         const strong = cell === this.state.hover || chosen;
-        ctx.globalAlpha = strong ? 1 : this.options.markOpacity;
+        ctx.globalAlpha = strong ? 1 : markOpacity;
         // On its filled cell the selected mark is dark, so it reads against the colour.
-        ctx.fillStyle = chosen ? theme.selectedMark : this.colourOf(item, theme.text);
+        ctx.fillStyle = chosen ? theme.selectedMark : this.partColour('marks', item, theme.text);
         // A selected dot grows, and becomes its number where the cell is big enough to read one.
         const room = Math.min(cell.width, cell.height) * this.camera.k;
         if (chosen && !useNumbers && room >= 14) {
@@ -968,25 +1025,29 @@ export class Gridmap {
     if (!this.disabled.size) return;
     const rects = this.getDisabledCover().rects.filter(onScreen);
     if (!rects.length) return;
-    ctx.fillStyle = this.options.theme.background;
+    ctx.fillStyle = this.transparent() ? '#000' : this.options.theme.background;
+    if (this.transparent()) ctx.globalCompositeOperation = 'destination-out';
     ctx.globalAlpha = Math.min(1, Math.max(0, Number(this.options.disabledOpacity) || 0));
     ctx.beginPath();
     rects.forEach(rect);
     ctx.fill();
     ctx.globalAlpha = 1;
+    ctx.globalCompositeOperation = 'source-over';
   }
 
   renderVeil(ctx, rect) {
     const region = this.focusRegion();
     if (!region) return;
     const { w, h } = this.viewport();
-    ctx.fillStyle = this.options.theme.background;
+    ctx.fillStyle = this.transparent() ? '#000' : this.options.theme.background;
+    if (this.transparent()) ctx.globalCompositeOperation = 'destination-out';
     ctx.globalAlpha = 0.66;
     ctx.beginPath();
     ctx.rect(0, 0, w, h);
     region.forEach(rect);
     ctx.fill('evenodd');
     ctx.globalAlpha = 1;
+    ctx.globalCompositeOperation = 'source-over';
   }
 
   renderLabels(X, Y) {
@@ -1042,15 +1103,16 @@ export class Gridmap {
         overflow: 'hidden',
         whiteSpace: 'nowrap',
         textOverflow: 'clip',
-        color: this.colourOf(item, this.options.theme.mutedText),
+        color: this.partColour('labels', item, this.options.theme.mutedText),
+        fontWeight: String(this.options.theme.labelWeight ?? 500),
         textShadow: labelGlow(this.colourOf(item, null), this.glow()),
-        background: this.options.theme.background,
+        background: this.labelBackground(),
         padding: '0 4px',
         fontSize: '9px',
         letterSpacing: '0.14em',
         lineHeight: '1.33',
         opacity: cover?.items.has(item.index) ? String(faded)
-          : selected?.itemIndex === item.index || hover?.itemIndex === item.index ? '1' : '0.88',
+          : selected?.itemIndex === item.index || hover?.itemIndex === item.index ? '1' : String(this.part('labels').opacity ?? 0.88),
       });
     }
 
@@ -1113,8 +1175,9 @@ export class Gridmap {
         whiteSpace: 'nowrap',
         textOverflow: 'clip',
         pointerEvents: 'none',
-        color: this.colourOf(item, this.options.theme.sectionText),
-        background: this.options.theme.background,
+        color: this.partColour('sections', item, this.options.theme.sectionText),
+        fontWeight: String(this.options.theme.labelWeight ?? 500),
+        background: this.labelBackground(),
         padding: '0 3px',
         fontSize: `${size}px`,
         letterSpacing: '0.12em',

@@ -172,9 +172,22 @@ export type GridmapTheme = {
   sectionText: string;
   /** The selected cell is filled in its colour; its mark (number or dot) takes this. Default black. */
   selectedMark: string;
+  /** Default '"IBM Plex Mono", ui-monospace, …': load IBM Plex Mono on the page to use it. */
   font: string;
+  /** Weight of item and section labels. Default 500 (Plex Mono Medium). */
+  labelWeight: number;
+  /** Behind labels. Defaults to `background`; on a transparent background, labels cut the lines behind them instead. */
+  labelBackground: string | null;
   /** 0–1: neon bloom on coloured borders, labels, hover and selection, in whatever colours are supplied. 0 turns it off. Default 0. */
   glow: number;
+};
+
+/** How one part of the map takes the item colours. */
+export type GridmapPartColour = {
+  /** In the item's colour (true, default) or the theme's neutral for that part. */
+  coloured?: boolean;
+  /** 0–1 strength. Defaults: borders 1, sections 0.8, marks `markOpacity`, labels 0.88. */
+  opacity?: number;
 };
 
 export type GridmapLayerPainter = (args: {
@@ -210,6 +223,14 @@ export type GridmapOptions = {
   showMarks?: boolean;
   markType?: 'number' | 'dot';
   markOpacity?: number;
+  /**
+   * Which parts take the item colours, and how strongly. Uncoloured parts use the theme's neutrals (itemLine,
+   * sectionLine, text, mutedText). A dense map is calmer with colour on borders and labels only, e.g.
+   * `{ sections: { opacity: 0.22 }, marks: { coloured: false, opacity: 0.28 } }`.
+   */
+  colourParts?: { borders?: GridmapPartColour; sections?: GridmapPartColour; marks?: GridmapPartColour; labels?: GridmapPartColour };
+  /** Colours for the selected cell, keyed like `colours` (e.g. a brighter tier than the map's), else its colour. */
+  selectedColours?: Record<string, string>;
   relativeMarkSize?: boolean;
   markMaxSize?: number;
   numberMinPx?: number;
@@ -230,7 +251,7 @@ export type GridmapOptions = {
   sectionLabelSize?: number;
   /** Ids of cells that can't be selected: veiled almost to nothing; a tap shows `labels.disabled` instead of selecting. */
   disabledCells?: string[];
-  /** 0–1: how much of a disabled cell the background hides. Default 0.9: barely visible. */
+  /** 0–1: how much of a disabled cell fades away (into the background, or erased when the background is transparent). Default 0.9: barely visible. */
   disabledOpacity?: number;
   theme?: Partial<GridmapTheme>;
   labels?: {
@@ -299,5 +320,7 @@ export class Gridmap {
   focusItem(idOrItem: string | GridmapItem): boolean;
   focusCell(idOrCell: string | GridmapCell): boolean;
   selectCell(idOrCell: string | GridmapCell): boolean;
+  /** Places the camera: world point (cx, cy) at the centre, at scale k (screen px per world unit). It stays put until the next focus. */
+  setCamera(cx: number, cy: number, k: number): void;
   destroy(): void;
 }

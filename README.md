@@ -80,10 +80,43 @@ map.destroy();
 Custom layers let applications draw domain-specific overlays without adding
 domain language to the library.
 
+## Colour
+
+`colours` maps ids (items by default; see `colourBy`) to colours. By default every part of an item takes its
+colour: its border, section partitions, marks and label. On a dense map that much colour shimmers, so
+`colourParts` sets which parts are coloured and how strongly; the rest use the theme's neutrals.
+
+```js
+createGridmap({
+  // ...
+  colours,
+  colourParts: {
+    borders: { opacity: 1 },
+    sections: { opacity: 0.22 },
+    marks: { coloured: false, opacity: 0.28 },
+    labels: { opacity: 1 },
+  },
+  // the selected cell in a brighter tier than the map's own colours
+  selectedColours: brighterColours,
+});
+```
+
+## Background
+
+Set `theme.background` to `'transparent'` (or any fully transparent colour) to draw the map straight onto the
+page behind it. Disabled cells and the focus veil then fade by erasing, and labels cut the lines behind them
+instead of sitting on a box. Set `theme.labelBackground` to keep a box.
+
+## Typeface
+
+The default `theme.font` is IBM Plex Mono, falling back to the system monospace: the library doesn't load fonts,
+so load IBM Plex Mono on the page (e.g. Google Fonts, weights 400 and 500). Labels use `theme.labelWeight`
+(default 500).
+
 ## Disabled Cells
 
 Cells passed to `disabledCells` (or `setDisabledCells`) can't be selected. They
-sink under the background (`disabledOpacity`, 0.9 by default), as whole items
+sink under the background, or fade away when it is transparent (`disabledOpacity`, 0.9 by default), as whole items
 where every cell is disabled, and the labels of fully disabled items and layers
 fade with them. Hovering or tapping one shows `labels.disabled(cell)`, so the
 application can say why, and emits `selectDisabledCell`; the selection is left
