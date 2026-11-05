@@ -284,18 +284,35 @@ export class Gridmap {
     };
   }
 
+  // A resize that only changes the height a little, as a browser toolbar sliding in or out does (mobile browsers can
+  // do this on every swipe), keeps the layout and the view: re-fitting would rearrange the map under the user's finger
+  // and lose their place. A new width (a rotation, a resized window) or a big change in height re-fits as usual.
+  isToolbarResize(w, h) {
+    const last = this.lastViewport;
+    return Boolean(last) && last.w === w && last.h > 1 && h !== last.h && Math.abs(h - last.h) <= last.h * 0.2;
+  }
+
   resize() {
     if (this.destroyed || !this.model) return;
+    const { w, h } = this.viewport();
+    const toolbar = this.isToolbarResize(w, h);
     const nextLayout = this.layoutName();
-    if (nextLayout !== this.model.layout) {
+    if (nextLayout !== this.model.layout && !toolbar) {
+      this.lastViewport = null;
       this.useLayout(nextLayout);
       return;
     }
 
-    const { w, h } = this.viewport();
+    // keep what's at the top of the map where it is, the edge a toolbar doesn't move
+    if (toolbar && this.camera.free) this.camera.cy += (h - this.lastViewport.h) / (2 * this.camera.k);
+    this.lastViewport = { w, h };
+
     const dpr = Math.min(window.devicePixelRatio || 1, 3);
-    this.canvas.width = Math.round(w * dpr);
-    this.canvas.height = Math.round(h * dpr);
+    const width = Math.round(w * dpr);
+    const height = Math.round(h * dpr);
+    // setting a canvas's size clears it, even to the same size, so only when it changes
+    if (this.canvas.width !== width) this.canvas.width = width;
+    if (this.canvas.height !== height) this.canvas.height = height;
     this.dpr = dpr;
     if (!this.camera.free) Object.assign(this.camera, this.cameraForFocus());
     this.render();
@@ -481,7 +498,8 @@ export class Gridmap {
     this.camera.cx = Math.min(Math.max(cx, world.x), world.x + world.width);
     this.camera.cy = Math.min(Math.max(cy, world.y), world.y + world.height);
     this.camera.free = true;
-    this.render();
+    // drags and pinches call this for every pointer event, often faster than the screen refreshes: draw once a frame
+    this.requestRender();
   }
 
   zoomAround(sx, sy, wx, wy, k) {
