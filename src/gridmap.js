@@ -1,5 +1,9 @@
 'use strict';
 
+import { mergeSegments, ownedBorderSegments, rectangleSegments } from './lines.js';
+import { surfaceColour, sectionSurfaceOpacity } from './surfaces.js';
+import { fitLabel, fitSectionLabel } from './labels.js';
+
 import {
   DEFAULT_FIT_RATIOS, DEFAULT_SECTION_GAP, DEFAULT_SECTION_PADDING, DEFAULT_WORLDS, buildGridmapModel, cellAt, coverCells, fitWorld, normaliseGridmapData, pickFitRatio,
 } from './model.js';
@@ -19,8 +23,9 @@ const DEFAULT_THEME = {
   selectedMark: '#000000',
   // IBM Plex Mono when the page loads it (even widths keep labels and numbers aligned), else the system monospace
   font: '"IBM Plex Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace',
-  // Item and section labels. Plex Mono Medium holds up at small sizes on a dark ground.
+  // Book names in Medium; internal groups in quieter Regular.
   labelWeight: 500,
+  sectionLabelWeight: 400,
   // Behind labels; defaults to the background. On a transparent background, labels cut the lines behind them instead.
   labelBackground: null,
   // 0–1: neon bloom on coloured borders, labels, hover and selection, in
@@ -35,11 +40,16 @@ const DEFAULT_OPTIONS = {
   layout: 'auto',
   fitRatios: DEFAULT_FIT_RATIOS,
   colours: {},
+  foregroundColours: {},
   colourBy: 'item',
   showMarks: true,
   markType: 'number',
   markOpacity: 0.75,
-  // Which parts take the item colours, and how strongly: { coloured, opacity } for borders, sections, marks and
+  // Resting dots are slightly firmer than numbers; explicit values override it.
+  dotOpacity: null,
+  // Neutral dots carry a trace of their item's colour; numbers stay neutral.
+  dotTint: 0.12,
+  // Which parts take the item colours, and how strongly: { coloured, opacity } for backgrounds, borders, sections, marks and
   // labels. Uncoloured parts use the theme's neutral colours. A map is calmer with colour on borders and labels only.
   colourParts: {},
   // Colours for the selected cell, keyed like `colours` (e.g. a brighter tier than the map's own), else its colour.
@@ -53,12 +63,13 @@ const DEFAULT_OPTIONS = {
   // labels on their borders. The gap between sections and the padding around
   // them (fractions of a cell's side) reshape the layout. Off by default.
   showSections: false,
+  sectionSurfaceVariation: 0.125,
   sectionGap: DEFAULT_SECTION_GAP,
   sectionPadding: DEFAULT_SECTION_PADDING,
   sectionFrame: 'box',
   // Section labels' font size in px. Larger labels need deeper padding before
   // they show, and take more of their section's width.
-  sectionLabelSize: 7.5,
+  sectionLabelSize: null, // automatic: 10 px, or 11 px in phone-sized containers
   // Cells that can't be selected: veiled almost to nothing, and a tap on one
   // shows its labels.disabled message instead of selecting it.
   disabledCells: [],
@@ -117,9 +128,11 @@ export class Gridmap {
     this.pointers = new Map();
     this.drag = null;
     this.gesture = null;
+    this.pressedCell = null;
     this.resizeObserver = null;
     this.disabled = new Set((this.options.disabledCells ?? []).map(String));
     this.disabledCover = null;
+    this.itemLabelForms = new WeakMap();
     this.tooltipTimer = null;
 
     this.mount();
@@ -250,6 +263,7 @@ export class Gridmap {
   useLayout(name) {
     const old = this.model;
     this.model = this.modelFor(name);
+    this.borderSegments = ownedBorderSegments(this.model.items, this.model.layers);
     if (old && old !== this.model) {
       const same = (collection, entity) => (entity ? this.model[collection][entity.index] : null);
       this.state.hover = null;
@@ -263,6 +277,7 @@ export class Gridmap {
       };
     }
     this.disabledCover = null;
+    this.pressedCell = null;
     this.prepareMarks();
     Object.assign(this.camera, this.cameraForFocus(), { free: false });
     this.resize();
@@ -399,12 +414,15 @@ export class Gridmap {
     return this.state.selected;
   }
 
-  colourOf(entity, fallback = this.options.theme.itemLine) {
-    const key = this.options.colourBy === 'group' ? entity.groupId
+  colourKey(entity) {
+    return this.options.colourBy === 'group' ? entity.groupId
       : this.options.colourBy === 'layer' ? entity.layerId
       : this.options.colourBy === 'cell' ? entity.id
       : entity.itemId ?? entity.id;
-    return this.options.colours?.[key] ?? fallback;
+  }
+
+  colourOf(entity, fallback = this.options.theme.itemLine) {
+    return this.options.colours?.[this.colourKey(entity)] ?? fallback;
   }
 
   part(name) {
@@ -413,15 +431,15 @@ export class Gridmap {
   }
 
   partColour(name, entity, neutral) {
-    return this.part(name).coloured ? this.colourOf(entity, neutral) : neutral;
+    if (!this.part(name).coloured) return neutral;
+    if (['borders', 'sections', 'labels'].includes(name)) {
+      return this.options.foregroundColours?.[this.colourKey(entity)] ?? this.colourOf(entity, neutral);
+    }
+    return this.colourOf(entity, neutral);
   }
 
   selectedColourOf(entity) {
-    const key = this.options.colourBy === 'group' ? entity.groupId
-      : this.options.colourBy === 'layer' ? entity.layerId
-      : this.options.colourBy === 'cell' ? entity.id
-      : entity.itemId ?? entity.id;
-    return this.options.selectedColours?.[key] ?? this.colourOf(entity, this.options.theme.text);
+    return this.options.selectedColours?.[this.colourKey(entity)] ?? this.colourOf(entity, this.options.theme.text);
   }
 
   // A transparent background: the page shows through, so fading means erasing rather than painting the background on
@@ -430,9 +448,23 @@ export class Gridmap {
     return bg === 'transparent' || /^rgba\(.*,0(\.0*)?\)$/.test(bg) || /^#[0-9a-f]{6}00$/.test(bg) || /^#[0-9a-f]{3}0$/.test(bg);
   }
 
-  labelBackground() {
+  surfaceBackground(item, section = null) {
+    const opacity = this.part('backgrounds').opacity ?? 0.08;
+    const strength = section ? sectionSurfaceOpacity(item.sections.indexOf(section), opacity, this.options.sectionSurfaceVariation) : opacity;
+    return surfaceColour(this.partColour('backgrounds', item, null), this.options.theme.background, strength);
+  }
+
+  labelBackground(item = null, section = null) {
     const theme = this.options.theme;
-    return theme.labelBackground ?? (this.transparent() ? 'transparent' : theme.background);
+    if (theme.labelBackground != null) return theme.labelBackground;
+    if (this.transparent()) return 'transparent';
+    if (!item) return theme.background;
+    const surface = this.surfaceBackground(item, section);
+    const target = section ?? item;
+    const region = this.focusRegion();
+    const inside = region?.some((r) => target.x >= r.x && target.x < r.x + r.width
+      && target.y >= r.y && target.y < r.y + r.height);
+    return region && !inside ? surfaceColour(theme.background, surface, 0.66) : surface;
   }
 
   glow() {
@@ -605,6 +637,7 @@ export class Gridmap {
   }
 
   startGesture() {
+    this.clearPressedCell();
     const points = this.gesturePoints();
     if (!points || points.distance <= 0) return;
     this.drag = null;
@@ -627,6 +660,11 @@ export class Gridmap {
 
     if (this.pointers.size === 1) {
       this.startDrag(point);
+      if (event.pointerType !== 'mouse') {
+        const cell = this.hitTest(point.x, point.y);
+        this.pressedCell = cell && !this.isCellDisabled(cell) ? cell : null;
+        this.requestRender();
+      }
       return;
     }
 
@@ -660,6 +698,7 @@ export class Gridmap {
       const dy = event.clientY - this.drag.startY;
       if (Math.hypot(dx, dy) > 4) this.drag.moved = true;
       if (this.drag.moved) {
+        this.clearPressedCell();
         const cam = this.drag.cam;
         this.setCamera(cam.cx - dx / cam.k, cam.cy - dy / cam.k, cam.k);
       }
@@ -677,6 +716,7 @@ export class Gridmap {
   }
 
   onPointerUp(event) {
+    this.clearPressedCell();
     const point = this.pointerPoint(event);
     const drag = this.drag;
     const wasTap = drag?.id === event.pointerId && !drag.moved && this.pointers.size === 1 && !this.gesture;
@@ -716,6 +756,7 @@ export class Gridmap {
   }
 
   onPointerCancel(event) {
+    this.clearPressedCell();
     this.pointers.delete(event.pointerId);
     this.root.releasePointerCapture?.(event.pointerId);
 
@@ -731,6 +772,12 @@ export class Gridmap {
 
     this.drag = null;
     this.gesture = null;
+  }
+
+  clearPressedCell() {
+    if (!this.pressedCell) return;
+    this.pressedCell = null;
+    this.requestRender();
   }
 
   onPointerLeave() {
@@ -794,6 +841,14 @@ export class Gridmap {
     const X = (x) => x * k + ox;
     const Y = (y) => y * k + oy;
     const rect = (r) => ctx.rect(X(r.x), Y(r.y), r.width * k, r.height * k);
+    const strokeSegments = (segments) => {
+      ctx.beginPath();
+      for (const s of mergeSegments(segments)) {
+        ctx.moveTo(X(s.x1), Y(s.y1));
+        ctx.lineTo(X(s.x2), Y(s.y2));
+      }
+      ctx.stroke();
+    };
     const onScreen = (r) => X(r.x) < w && X(r.x + r.width) > 0 && Y(r.y) < h && Y(r.y + r.height) > 0;
 
     ctx.setTransform(this.dpr || 1, 0, 0, this.dpr || 1, 0, 0);
@@ -804,6 +859,20 @@ export class Gridmap {
     ctx.setLineDash([]);
 
     const visibleItems = this.model.items.filter(onScreen);
+
+    // Stable item fields and repeating section tones sit below every mark,
+    // border and interaction layer. Neither changes the model geometry.
+    ctx.globalAlpha = 1;
+    for (const item of visibleItems) {
+      ctx.fillStyle = this.surfaceBackground(item);
+      ctx.beginPath(); rect(item);
+      if (this.options.showSections) item.sections.forEach(rect);
+      ctx.fill('evenodd'); // Leave holes for section tones, including on transparent themes.
+      if (this.options.showSections) for (const section of item.sections) {
+        ctx.fillStyle = this.surfaceBackground(item, section);
+        ctx.beginPath(); rect(section); ctx.fill();
+      }
+    }
 
     const hover = this.state.hover;
     if (hover) {
@@ -817,44 +886,15 @@ export class Gridmap {
 
     const lineAlpha = Math.min(1, Math.max(0, (this.model.cellSide * k - 6) / 6));
     if (lineAlpha > 0) {
-      ctx.globalAlpha = lineAlpha;
-      ctx.strokeStyle = theme.cellLine;
-      ctx.beginPath();
-      for (const item of visibleItems) for (const cell of item.cells) if (onScreen(cell)) rect(cell);
-      ctx.stroke();
-      ctx.globalAlpha = 1;
-    }
-
-    // Neon: a soft wide stroke under each coloured border, one path per colour.
-    const glow = this.glow();
-    if (glow > 0 && this.part('borders').coloured) {
-      const blooms = new Map();
+      ctx.lineWidth = 0.5;
       for (const item of visibleItems) {
-        const colour = this.colourOf(item, null);
-        if (!colour) continue;
-        if (!blooms.has(colour)) blooms.set(colour, []);
-        blooms.get(colour).push(item);
-      }
-      for (const [colour, items] of blooms) {
-        ctx.strokeStyle = colour;
-        ctx.beginPath();
-        items.forEach(rect);
-        ctx.globalAlpha = 0.09 * glow;
-        ctx.lineWidth = 6;
-        ctx.stroke();
-        ctx.globalAlpha = 0.2 * glow;
-        ctx.lineWidth = 2.5;
-        ctx.stroke();
+        const colour = this.part('borders').coloured ? this.colourOf(item, null) : null;
+        ctx.globalAlpha = lineAlpha * (colour ? 0.08 * (this.part('borders').opacity ?? 1) : 1);
+        ctx.strokeStyle = colour ?? theme.cellLine;
+        strokeSegments(item.cells.filter(onScreen).flatMap(rectangleSegments));
       }
       ctx.lineWidth = 1;
-    }
-
-    ctx.globalAlpha = this.part('borders').opacity ?? 1;
-    for (const item of visibleItems) {
-      ctx.strokeStyle = this.partColour('borders', item, theme.itemLine);
-      ctx.beginPath();
-      rect(item);
-      ctx.stroke();
+      ctx.globalAlpha = 1;
     }
 
     // Section partitions: dotted, in the item's colour, fading in as cells grow big enough to read.
@@ -862,7 +902,8 @@ export class Gridmap {
       ? Math.min(1, Math.max(0, (this.model.cellSide * k - 3) / 6))
       : 0;
     if (sectionAlpha > 0) {
-      ctx.globalAlpha = sectionAlpha * (this.part('sections').opacity ?? 0.8);
+      ctx.globalAlpha = sectionAlpha * (this.part('sections').opacity ?? 0.3);
+      ctx.lineWidth = 0.75;
       ctx.setLineDash([1.5, 3]);
       for (const item of visibleItems) {
         if (!item.inner) continue;
@@ -883,26 +924,42 @@ export class Gridmap {
       ctx.setLineDash([]);
     }
 
-    ctx.globalAlpha = 1;
-    ctx.strokeStyle = theme.groupLine;
-    ctx.lineWidth = 1.25;
-    ctx.beginPath();
-    for (const group of this.model.groups) {
-      for (const segment of group.outline.filter((sg) => sg.betweenGroups)) {
-        ctx.moveTo(X(segment.x1), Y(segment.y1));
-        ctx.lineTo(X(segment.x2), Y(segment.y2));
+    // Structural borders inherit the earlier item's colour. A shared edge is
+    // drawn once at its strongest structural weight, including T-junctions.
+    const glow = this.glow();
+    const batches = [];
+    for (const [level, width, opacity, neutral] of [
+      ['item', 1, 1, theme.itemLine],
+      ['group', 1.25, 0.8, theme.groupLine],
+      ['layer', 1.75, 1, theme.layerLine],
+    ]) {
+      const colours = new Map();
+      for (const segment of this.borderSegments[level]) {
+        const colour = this.partColour('borders', segment.owner, neutral);
+        if (!colours.has(colour)) colours.set(colour, []);
+        colours.get(colour).push(segment);
       }
+      for (const [colour, segments] of colours) batches.push({ colour, segments, width, opacity });
     }
-    ctx.stroke();
-
-    ctx.strokeStyle = theme.layerLine;
-    ctx.lineWidth = 1.5;
-    ctx.beginPath();
-    this.model.layers.forEach(rect);
-    ctx.stroke();
+    if (glow > 0 && this.part('borders').coloured) for (const batch of batches) {
+      ctx.strokeStyle = batch.colour;
+      ctx.globalAlpha = 0.09 * glow;
+      ctx.lineWidth = 6;
+      strokeSegments(batch.segments);
+      ctx.globalAlpha = 0.2 * glow;
+      ctx.lineWidth = 2.5;
+      strokeSegments(batch.segments);
+    }
+    for (const batch of batches) {
+      ctx.strokeStyle = batch.colour;
+      ctx.globalAlpha = batch.opacity * (this.part('borders').opacity ?? 1);
+      ctx.lineWidth = batch.width;
+      strokeSegments(batch.segments);
+    }
+    ctx.globalAlpha = 1;
 
     const selected = this.state.selected;
-    // Selection is the cell alone, filled and glowing; item borders never change.
+    // The selected cell remains the light peak, with a precise flat fill.
     if (selected) {
       const colour = this.selectedColourOf(selected);
       ctx.strokeStyle = colour;
@@ -990,15 +1047,20 @@ export class Gridmap {
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     const markOpacity = this.part('marks').opacity ?? this.options.markOpacity;
+    const dotOpacity = Math.min(1, Math.max(0, this.options.dotOpacity ?? markOpacity * 17 / 14));
+    const active = this.activeMarker();
     for (const item of this.model.items) {
-      ctx.fillStyle = this.partColour('marks', item, theme.text);
+      const numberColour = this.partColour('marks', item, theme.text);
+      const dotColour = this.part('marks').coloured ? numberColour
+        : surfaceColour(this.colourOf(item, null), theme.text, this.options.dotTint);
       for (const cell of item.cells) {
         if (!onScreen(cell)) continue;
         const chosen = cell === this.state.selected;
-        const strong = cell === this.state.hover || chosen;
-        ctx.globalAlpha = strong ? 1 : markOpacity;
+        const strong = cell === active || chosen;
+        ctx.globalAlpha = useNumbers || chosen ? (strong ? 1 : markOpacity)
+          : cell === active ? Math.min(1, Math.max(0.7, dotOpacity * 1.5)) : dotOpacity;
         // On its filled cell the selected mark is dark, so it reads against the colour.
-        ctx.fillStyle = chosen ? theme.selectedMark : this.partColour('marks', item, theme.text);
+        ctx.fillStyle = chosen ? theme.selectedMark : useNumbers ? numberColour : dotColour;
         // A selected dot grows, and becomes its number where the cell is big enough to read one.
         const room = Math.min(cell.width, cell.height) * this.camera.k;
         if (chosen && !useNumbers && room >= 14) {
@@ -1022,19 +1084,30 @@ export class Gridmap {
     ctx.globalAlpha = 1;
   }
 
+  activeMarker() {
+    if (this.gesture || this.drag?.moved) return null;
+    const cell = this.pressedCell ?? this.state.hover;
+    return cell && !this.isCellDisabled(cell) ? cell : null;
+  }
+
   renderMarkEmphasis(ctx, X, Y, useNumbers, dot) {
-    const hover = this.state.hover;
+    const hover = this.activeMarker();
     if (useNumbers || !hover || hover === this.state.selected) return;
     const radius = dot * this.markScale(hover) / 2;
-    const colour = this.colourOf(hover, this.options.theme.text);
-    ctx.fillStyle = colour;
-    ctx.globalAlpha = 1;
-    ctx.shadowColor = colour;
-    ctx.shadowBlur = 8 * this.glow();
-    ctx.beginPath();
-    ctx.arc(X(hover.centerX), Y(hover.centerY), radius + 1.2, 0, Math.PI * 2);
-    ctx.fill();
+    const width = 0.75;
+    const ringRadius = radius + 1.5 + width / 2;
+    // Omit the outline when crowded; never alter the data-sized core to fit it.
+    if (ringRadius + width / 2 > Math.min(hover.width, hover.height) * this.camera.k / 2 - 1) return;
+    ctx.save();
+    ctx.strokeStyle = this.colourOf(hover, this.options.theme.text);
+    ctx.globalAlpha = 0.7;
+    ctx.lineWidth = width;
+    ctx.setLineDash([]);
     ctx.shadowBlur = 0;
+    ctx.beginPath();
+    ctx.arc(X(hover.centerX), Y(hover.centerY), ringRadius, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.restore();
   }
 
   // Disabled cells sink under the background, borders, marks and all, so
@@ -1068,18 +1141,37 @@ export class Gridmap {
     ctx.globalCompositeOperation = 'source-over';
   }
 
+  labelSizes() {
+    const phone = this.viewport().w <= 699;
+    return {
+      item: phone ? 12 : 11,
+      number: phone ? 10 : 9,
+      layer: phone ? 12 : 11.5,
+      section: Number(this.options.sectionLabelSize) > 0
+        ? Number(this.options.sectionLabelSize) : phone ? 11 : 10,
+    };
+  }
+
   renderLabels(X, Y) {
+    const sizes = this.labelSizes();
+    const lineHeight = Math.ceil(sizes.item * 1.35);
     const labelItem = this.options.labels.item;
+    const measure = (text, size, spacing, weight = this.options.theme.labelWeight ?? 500) => {
+      this.ctx.font = `${weight} ${size}px ${this.options.theme.font}`;
+      return this.ctx.measureText(text).width + Math.max(0, text.length - 1) * size * spacing;
+    };
     const selected = this.state.selected;
     const hover = this.state.hover;
     const cover = this.disabled.size ? this.getDisabledCover() : null;
     const faded = 1 - Math.min(1, Math.max(0, Number(this.options.disabledOpacity) || 0));
     this.overlay.replaceChildren();
+    const occupied = [];
+    const verticals = Object.values(this.borderSegments).flat().filter((edge) => Math.abs(edge.x1 - edge.x2) < 1e-6);
 
     for (const layer of this.model.layers) {
       const h = layer.height * this.camera.k;
       const text = layer.label.toUpperCase();
-      if (h < text.length * 7.5) continue;
+      if (h < measure(text, sizes.layer, 0.32, 400) + 12) continue;
       const el = createElement('div', { text }, this.overlay);
       Object.assign(el.style, {
         position: 'absolute',
@@ -1088,7 +1180,7 @@ export class Gridmap {
         transform: 'translate(-50%, -50%) rotate(-90deg)',
         transformOrigin: 'center',
         color: selected?.layerIndex === layer.index ? this.options.theme.layerLine : this.options.theme.mutedText,
-        fontSize: '9.5px',
+        fontSize: `${sizes.layer}px`,
         letterSpacing: '0.32em',
         whiteSpace: 'nowrap',
         opacity: cover?.layers.has(layer.index) ? String(faded) : '',
@@ -1098,109 +1190,122 @@ export class Gridmap {
     for (const item of this.model.items) {
       const w = item.width * this.camera.k;
       const h = item.height * this.camera.k;
-      if (h < 22) continue;
+      if (h < sizes.item * 2.4) continue;
       const number = String(item.index + 1);
-      const candidates = typeof labelItem === 'function'
+      const numberWidth = measure(number, sizes.number, 0.03, 400);
+      const names = (typeof labelItem === 'function'
         ? [labelItem(item, this)]
-        : this.options.itemLabels === 'short'
-          ? [item.shortLabel]
-          : [item.label, item.shortLabel];
-      const itemLabelText = candidates
-        .filter(Boolean)
-        .map((candidate) => `${item.index + 1}.${candidate}`.toUpperCase())
-        .find((candidate) => candidate.length * 7.3 + 20 <= w)
-        ?? (number.length * 7.3 + 14 <= w ? number : null);
-      if (!itemLabelText) continue;
+        : this.options.itemLabels === 'short' ? [item.shortLabel] : [item.label, item.shortLabel])
+        .filter(Boolean).map((name) => String(name).toUpperCase());
+      const candidates = [...new Set(names)].map((name) => ({
+        key: name, name, width: numberWidth + 5 + measure(name, sizes.item, 0.09),
+      }));
+      candidates.push({ key: 'number', name: '', width: numberWidth });
+      // Keep the mask clear of the next junction along this top border.
+      const nextJunction = verticals.filter((edge) => edge.x1 > item.x + 6 / this.camera.k
+        && edge.x1 < item.x + item.width
+        && (Math.abs(edge.y1 - item.y) < 1e-6 || Math.abs(edge.y2 - item.y) < 1e-6))
+        .reduce((right, edge) => Math.min(right, edge.x1), item.x + item.width);
+      const available = Math.min(w, (nextJunction - item.x) * this.camera.k) - 24;
+      const chosen = fitLabel(candidates, available, this.itemLabelForms.get(item));
+      this.itemLabelForms.set(item, chosen?.key ?? null);
+      if (!chosen) continue;
 
-      const el = createElement('div', { text: itemLabelText }, this.overlay);
+      const el = createElement('div', {}, this.overlay);
+      const prefix = createElement('span', { text: number }, el);
+      Object.assign(prefix.style, {
+        fontSize: `${sizes.number}px`, fontWeight: '400', opacity: '0.65',
+        letterSpacing: '0.03em', fontVariantNumeric: 'tabular-nums',
+      });
+      if (chosen.name) {
+        const name = createElement('span', { text: chosen.name }, el);
+        name.style.marginLeft = '5px';
+      }
+      occupied.push({ x: X(item.x) + 6, y: Y(item.y) - lineHeight / 2, width: chosen.width + 8, height: lineHeight });
       Object.assign(el.style, {
         position: 'absolute',
-        left: `${X(item.x) + 5}px`,
-        top: `${Y(item.y) - 6}px`,
-        maxWidth: `${Math.max(20, w - 8)}px`,
+        left: `${X(item.x) + 6}px`,
+        top: `${Y(item.y) - lineHeight / 2}px`,
+        display: 'inline-flex',
+        alignItems: 'center',
+        height: `${lineHeight}px`,
+        maxWidth: `${Math.max(0, available + 8)}px`,
         overflow: 'hidden',
         whiteSpace: 'nowrap',
         textOverflow: 'clip',
         color: this.partColour('labels', item, this.options.theme.mutedText),
         fontWeight: String(this.options.theme.labelWeight ?? 500),
         textShadow: labelGlow(this.colourOf(item, null), this.glow()),
-        background: this.labelBackground(),
+        background: this.labelBackground(item),
         padding: '0 4px',
-        fontSize: '9px',
-        letterSpacing: '0.14em',
-        lineHeight: '1.33',
+        fontSize: `${sizes.item}px`,
+        letterSpacing: '0.09em',
+        lineHeight: `${lineHeight}px`,
         opacity: cover?.items.has(item.index) ? String(faded)
           : selected?.itemIndex === item.index || hover?.itemIndex === item.index ? '1' : String(this.part('labels').opacity ?? 0.88),
       });
     }
 
-    if (this.options.showSections) this.renderSectionLabels(X, Y, cover, faded);
+    if (this.options.showSections) this.renderSectionLabels(X, Y, cover, faded, occupied);
   }
 
   // Small labels on each named section's top border, like the item label on
   // the item's: in the item's colour, muted. They sit in the item's padding,
   // so they show only once the padding is deep enough to hold one clear of
   // the item label, and where the text fits.
-  renderSectionLabels(X, Y, cover, faded) {
+  renderSectionLabels(X, Y, cover, faded, occupied = []) {
     const k = this.camera.k;
     const labelSection = this.options.labels.section;
-    // Measures below were tuned at 7.5px and scale with the size.
-    const size = Number(this.options.sectionLabelSize) || 7.5;
-    const charWidth = size * 5.6 / 7.5;
+    const size = this.labelSizes().section;
+    const weight = this.options.theme.sectionLabelWeight ?? 400;
+    this.ctx.font = `${weight} ${size}px ${this.options.theme.font}`;
+    const measure = (text) => this.ctx.measureText(text.toUpperCase()).width + Math.max(0, text.length - 1) * size * 0.06;
     for (const section of this.model.sections) {
       if (!section.label) continue;
       const item = this.model.items[section.itemIndex];
       if (item.sectionPadding * k < size * 1.2 + 2) continue;
       const w = section.width * k;
-      // Labels stay within two-thirds of the section's width, so a long one is cut short, not crowding the border.
+      // Reserve a clear line tail; reveal a complete group name only when it fits.
       const budget = w * 2 / 3;
-      const fits = (text) => text.length * charWidth + 14 <= budget;
+      const available = budget - 18;
       const first = item.cells[section.start - 1]?.label ?? section.start;
       const last = item.cells[section.end - 1]?.label ?? section.end;
-      const range = section.start === section.end ? `(${first})` : `(${first}-${last})`;
-
-      // A custom label, else the name and its range, shrinking to the name alone, the short name, then the name cut short.
-      let name;
-      let tail = '';
-      if (typeof labelSection === 'function') {
-        name = labelSection(section, this);
-        if (!name || !fits(name)) continue;
-      } else if (fits(`${section.label} ${range}`)) {
-        name = section.label;
-        tail = ` ${range}`;
-      } else if (fits(section.label)) {
-        name = section.label;
-      } else if (section.shortLabel && fits(`${section.shortLabel} ${range}`)) {
-        name = section.shortLabel;
-        tail = ` ${range}`;
-      } else if (section.shortLabel && fits(section.shortLabel)) {
-        name = section.shortLabel;
-      } else {
-        const chars = Math.floor((budget - 14) / charWidth) - 1;
-        if (chars < 8) continue;
-        name = `${section.label.slice(0, chars).trimEnd()}…`;
-      }
+      const range = section.start === section.end ? `(${first})` : `(${first}–${last})`;
+      const showRange = item.sectionPadding * k >= size * 2.4 + 4;
+      const custom = typeof labelSection === 'function' ? labelSection(section, this) : null;
+      if (typeof labelSection === 'function' && !custom) continue;
+      const chosen = fitSectionLabel(custom ? { label: String(custom) } : section,
+        available, measure, range, showRange && !custom);
+      if (!chosen) continue;
+      const { name, tail } = chosen;
+      const box = {
+        x: X(section.x) + 6, y: Y(section.y) - size * 0.6,
+        width: measure(name + tail) + 8, height: size * 1.2,
+      };
+      if (occupied.some((other) => box.x < other.x + other.width + 4 && box.x + box.width + 4 > other.x
+        && box.y < other.y + other.height + 4 && box.y + box.height + 4 > other.y)) continue;
+      occupied.push(box);
 
       // The name leads; the range is dimmer still.
       const el = createElement('div', { text: name.toUpperCase() }, this.overlay);
-      if (tail) createElement('span', { text: tail, style: 'opacity:0.65' }, el);
+      if (tail) createElement('span', { text: tail, style: 'opacity:0.55' }, el);
       Object.assign(el.style, {
         position: 'absolute',
-        left: `${X(section.x) + 5}px`,
-        top: `${Y(section.y) - size * 0.6 - 0.5}px`,
+        left: `${box.x}px`,
+        top: `${box.y}px`,
         maxWidth: `${Math.max(20, budget)}px`,
         overflow: 'hidden',
         whiteSpace: 'nowrap',
         textOverflow: 'clip',
         pointerEvents: 'none',
         color: this.partColour('sections', item, this.options.theme.sectionText),
-        fontWeight: String(this.options.theme.labelWeight ?? 500),
-        background: this.labelBackground(),
-        padding: '0 3px',
+        fontWeight: String(weight),
+        background: this.labelBackground(item, section),
+        padding: '0 4px',
         fontSize: `${size}px`,
-        letterSpacing: '0.12em',
+        letterSpacing: '0.06em',
         lineHeight: '1.2',
-        opacity: cover?.items.has(section.itemIndex) ? String(faded) : '0.78',
+        opacity: cover?.items.has(section.itemIndex) ? String(faded) : '0.82',
       });
     }
   }

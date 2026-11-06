@@ -162,9 +162,13 @@ export type GridmapTheme = {
   text: string;
   mutedText: string;
   faintText: string;
+  /** Fallback chapter grid colour when borders are neutral or an item has no colour. */
   cellLine: string;
+  /** Fallback item outline colour. Shared edges use the earlier item's colour when supplied. */
   itemLine: string;
+  /** Fallback group boundary colour; otherwise inherits the owning item's colour. */
   groupLine: string;
+  /** Fallback layer perimeter colour; otherwise follows its adjoining item's colour. */
   layerLine: string;
   /** Partitions between an item's sections, for items with no colour. */
   sectionLine: string;
@@ -174,9 +178,11 @@ export type GridmapTheme = {
   selectedMark: string;
   /** Default '"IBM Plex Mono", ui-monospace, …': load IBM Plex Mono on the page to use it. */
   font: string;
-  /** Weight of item and section labels. Default 500 (Plex Mono Medium). */
+  /** Weight of item names. Default 500 (Plex Mono Medium). */
   labelWeight: number;
-  /** Behind labels. Defaults to `background`; on a transparent background, labels cut the lines behind them instead. */
+  /** Weight of section labels. Default 400 (Plex Mono Regular). */
+  sectionLabelWeight?: number;
+  /** Behind labels. Defaults to the item's or section's tinted surface; on a transparent background, labels cut the lines behind them instead. */
   labelBackground: string | null;
   /** 0–1: neon bloom on coloured borders, labels, hover and selection, in whatever colours are supplied. 0 turns it off. Default 0. */
   glow: number;
@@ -186,7 +192,7 @@ export type GridmapTheme = {
 export type GridmapPartColour = {
   /** In the item's colour (true, default) or the theme's neutral for that part. */
   coloured?: boolean;
-  /** 0–1 strength. Defaults: borders 1, sections 0.8, marks `markOpacity`, labels 0.88. */
+  /** 0–1 strength. Defaults: borders 1, backgrounds 0.08, sections 0.3, marks `markOpacity`, labels 0.88. */
   opacity?: number;
 };
 
@@ -219,16 +225,23 @@ export type GridmapOptions = {
   /** World shapes (width / height) the 'fit' layout may use. Defaults to DEFAULT_FIT_RATIOS. */
   fitRatios?: number[];
   colours?: Record<string, string>;
+  /** Optional tones for borders, labels and section partitions, keyed like colours. Surfaces and markers retain colours. */
+  foregroundColours?: Record<string, string>;
   colourBy?: 'item' | 'group' | 'layer' | 'cell';
   showMarks?: boolean;
   markType?: 'number' | 'dot';
   markOpacity?: number;
+  /** Resting dot opacity. Defaults to mark opacity × 17/14 (28% becomes 34%), clamped to 0–1. Number opacity is unchanged. */
+  dotOpacity?: number;
+  /** 0–1 item-colour tint in otherwise neutral dots. Default 0.12; 0 keeps them fully neutral. Does not tint numbers. */
+  dotTint?: number;
   /**
    * Which parts take the item colours, and how strongly. Uncoloured parts use the theme's neutrals (itemLine,
    * sectionLine, text, mutedText). A dense map is calmer with colour on borders and labels only, e.g.
    * `{ sections: { opacity: 0.22 }, marks: { coloured: false, opacity: 0.28 } }`.
    */
-  colourParts?: { borders?: GridmapPartColour; sections?: GridmapPartColour; marks?: GridmapPartColour; labels?: GridmapPartColour };
+  /** Backgrounds default to an 8% item tint; section surfaces repeat at 87.5%, 112.5% and 100% of that strength by default. */
+  colourParts?: { backgrounds?: GridmapPartColour; borders?: GridmapPartColour; sections?: GridmapPartColour; marks?: GridmapPartColour; labels?: GridmapPartColour };
   /** Colours for the selected cell, keyed like `colours` (e.g. a brighter tier than the map's), else its colour. */
   selectedColours?: Record<string, string>;
   relativeMarkSize?: boolean;
@@ -238,6 +251,8 @@ export type GridmapOptions = {
   history?: boolean;
   /** Show each item's `sections`: dotted partitions in the item's colour, with small labels on their borders. Default false. */
   showSections?: boolean;
+  /** 0–1 variation around the item surface opacity. Default 0.125: 7%, 9%, 8% at an 8% base. */
+  sectionSurfaceVariation?: number;
   /** Gap between sections as a fraction of a cell's side. Default 0: sections touch. */
   sectionGap?: number;
   /** Padding inside an item, around its sections, as a fraction of a cell's side. It leaves room for section labels on the borders. Default 0.6. */
@@ -247,7 +262,7 @@ export type GridmapOptions = {
    * 'open': padding only along the top, where the labels sit, and only the top edge and the dividers are drawn.
    */
   sectionFrame?: 'box' | 'open';
-  /** Font size of section labels in px. Default 7.5. Larger labels need deeper `sectionPadding` on screen before they show. */
+  /** Section label size in px. Default: 10, or 11 in containers up to 699 px wide. Larger labels need deeper `sectionPadding` before they show. */
   sectionLabelSize?: number;
   /** Ids of cells that can't be selected: veiled almost to nothing; a tap shows `labels.disabled` instead of selecting. */
   disabledCells?: string[];
