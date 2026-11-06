@@ -7,7 +7,7 @@ export function bibleToGridmapData(bible, chapterGroups = {}) {
     meta: { source: 'bible' },
     layers: bible.testaments.map((testament) => ({
       id: slug(testament.name),
-      label: testament.name,
+      label: `${testament.name} Testament`,
       groups: testament.divisions.map((division) => ({
         id: slug(division.name),
         label: division.name,

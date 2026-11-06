@@ -157,6 +157,15 @@ export type GridmapModel = {
   cells: GridmapCell[];
 };
 
+export type GridmapFocus = {
+  level: 'map' | 'layer' | 'group' | 'item' | 'section' | 'cell';
+  layer?: GridmapLayer;
+  group?: GridmapGroup;
+  item?: GridmapItem;
+  section?: GridmapSection | null;
+  cell?: GridmapCell;
+};
+
 export type GridmapTheme = {
   background: string;
   text: string;
@@ -248,7 +257,11 @@ export type GridmapOptions = {
   markMaxSize?: number;
   numberMinPx?: number;
   itemLabels?: 'short' | 'full';
+  /** Prioritise division names and book abbreviations in overview, revealing full book names through closer inspection. Default false. */
+  semanticZoom?: boolean;
   history?: boolean;
+  /** How much surrounding context fades during explicit focus. Default 0.16; hover does not add a veil. */
+  focusOpacity?: number;
   /** Show each item's `sections`: dotted partitions in the item's colour, with small labels on their borders. Default false. */
   showSections?: boolean;
   /** 0–1 variation around the item surface opacity. Default 0.125: 7%, 9%, 8% at an 8% base. */
@@ -282,7 +295,7 @@ export type GridmapOptions = {
   onSelectCell?: (cell: GridmapCell, map: Gridmap) => void;
   /** A disabled cell was tapped; the selection is unchanged. */
   onSelectDisabledCell?: (cell: GridmapCell, map: Gridmap) => void;
-  onFocusChange?: (focus: Record<string, unknown>, map: Gridmap) => void;
+  onFocusChange?: (focus: GridmapFocus, map: Gridmap) => void;
   onDataChange?: (data: GridmapData, map: Gridmap) => void;
 };
 
@@ -328,9 +341,16 @@ export class Gridmap {
   setConfig(config?: Partial<GridmapOptions>): void;
   getModel(): GridmapModel;
   getSelectedCell(): GridmapCell | null;
+  getFocus(): GridmapFocus;
   setDisabledCells(ids?: Iterable<string>): void;
   isCellDisabled(idOrCell: string | GridmapCell): boolean;
+  setFocus(level: GridmapFocus['level'], value?: string | number | GridmapLayer | GridmapGroup | GridmapItem | GridmapSection | GridmapCell): boolean;
   focusMap(): boolean;
+  focusLayer(idOrLayer: string | GridmapLayer): boolean;
+  /** Focus an internal chapter group by its uid, model index, or section object. */
+  focusSection(idOrSection: string | number | GridmapSection): boolean;
+  /** Return to the immediate parent without changing selection. */
+  focusParent(): boolean;
   focusGroup(idOrGroup: string | GridmapGroup): boolean;
   focusItem(idOrItem: string | GridmapItem): boolean;
   focusCell(idOrCell: string | GridmapCell): boolean;

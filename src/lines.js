@@ -66,11 +66,12 @@ export function ownedBorderSegments(items, layers) {
       const neighbours = edges.filter((edge) => edge.lo < middle && edge.hi > middle);
       if (!neighbours.length) continue;
       const owner = neighbours.reduce((first, edge) => edge.item.index < first.item.index ? edge : first).item;
+      const itemIndices = neighbours.map((edge) => edge.item.index);
       const level = neighbours.some((edge) => edge.outer) ? 'layer'
         : new Set(neighbours.map((edge) => edge.item.groupIndex)).size > 1 ? 'group' : 'item';
       result[level].push(horizontal
-        ? { x1: lo, y1: at, x2: hi, y2: at, owner }
-        : { x1: at, y1: lo, x2: at, y2: hi, owner });
+        ? { x1: lo, y1: at, x2: hi, y2: at, owner, itemIndices }
+        : { x1: at, y1: lo, x2: at, y2: hi, owner, itemIndices });
     }
   }
   return result;

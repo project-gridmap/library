@@ -293,3 +293,62 @@ near-black base. Selected chapters keep their existing flat bright fill; a
 subtle gradient was compared and omitted because it added little clarity.
 Typography, ownership boundaries, chapter geometry and marker behaviour remain
 unchanged by these colour refinements.
+
+## Visual attention
+
+Hover or a touch press creates one attention chain: chapter, internal group,
+then containing book. The book label gets a small 6% light blend, and its
+structural edges regain prominence (92% to 100% in the demo). Shared edges keep
+their earlier-book colour ownership, including edges adjoining the inspected
+book that another book owns. Weights and positions do not change.
+
+The active chapter group raises its existing dotted lines from 22% to 30% and
+its already-visible label from 82% to 95%. Its resting markers lift slightly
+(34% to 38% for dots; 28% to 32% for numbers); the rest of the containing book
+receives a smaller lift. This changes luminosity only: marker sizes, colour,
+number typography and selection styling remain intact. Disabled chapters do
+not receive the marker lift. The same group and book cues stay steady while
+inspection moves between chapters in that group. Hover does not reveal extra
+labels or change the camera.
+
+Explicit book or division focus retains its local cues after hover ends;
+chapter focus also retains the containing chapter group. The surrounding map
+and its labels fade by only 16% (`focusOpacity`, 0–1), rather than 66%. This
+focus treatment is applied once, without additional hover veils. Disabled-cell
+fading remains separate. No animation or new glow is added. Focus changes clear
+transient hover/press emphasis and preserve the selected chapter.
+
+## Semantic zoom and inspection
+
+The main demo enables `semanticZoom`. At overview depth, the renderer favours
+book abbreviations and adds complete division names in free space along their
+existing boundaries. Muted colour-filled tabs with dark lettering distinguish
+division captions from numbered book labels. Each caption keeps a preferred anchor chosen in the neutral
+overview, independent of hover or the current camera. Crowding or clipping hides
+it rather than moving it to another edge; a different responsive map geometry
+gets its own anchors. Closer exploration or
+book attention restores full names where they fit; chapter groups and numbers
+retain their existing space-based reveal rules. No region geometry changes.
+The library option defaults to false so other applications can adopt the
+experiment explicitly.
+
+The existing reference area now exposes a navigable path from testament through
+division, book, named chapter group and chapter. Its second line reveals book
+and chapter counts, group ranges or a chapter's verse count from the existing
+data. Desktop hover is a temporary preview; tap/click selection is persistent.
+Keyboard focus on a reference previews its details without moving the camera;
+activation focuses that region. Mobile paths scroll horizontally with 44 px
+high targets. Selection is retained when inspecting another level.
+
+The neutral library API adds `focusLayer(id)`, `focusSection(uidOrIndex)`,
+`focusParent()` and `getFocus()`. Escape and background taps step to the immediate
+parent: cell → named section → item → group → layer → map. Unnamed filler
+sections are skipped. Wheel and pinch continue to move the camera independently.
+Turning sections off falls back from section focus to its book, and responsive
+rebuilds rebind focus and selection by identity.
+
+Deep links include `#old`, `#the-law`, `#GEN`, `#GEN/group/12-36`, and `#GEN.12`.
+Opening a chapter link selects it; subsequent back/forward navigation changes
+focus while retaining the user's selection. The five division colours keep
+their geographic meaning, and the map's type, boundaries and marker sizing are
+unchanged.

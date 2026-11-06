@@ -5,7 +5,7 @@ import { Gridmap } from '../src/gridmap.js';
 function fixture() {
   const cells = [10, 40].map((value, index) => ({
     id: `book/${index + 1}`, label: String(index + 1), value,
-    width: 12, height: 12, centerX: index * 12 + 6, centerY: 6,
+    itemIndex: 0, sectionIndex: -1, width: 12, height: 12, centerX: index * 12 + 6, centerY: 6,
   }));
   const map = Object.assign(Object.create(Gridmap.prototype), {
     options: {
@@ -14,8 +14,8 @@ function fixture() {
       colours: {}, markOpacity: 0.75, dotTint: 0,
       relativeMarkSize: true, markMaxSize: 0.4,
     },
-    model: { world: {}, items: [{ id: 'book', cells }] },
-    state: { hover: null, selected: null }, disabled: new Set(),
+    model: { world: {}, items: [{ id: 'book', index: 0, cells }], sections: [] },
+    state: { hover: null, selected: null, focus: { level: 'map' } }, disabled: new Set(),
     camera: { k: 1, cx: 0, cy: 0 }, medianValue: 10, referenceValue: 40, medianNumberSize: 1,
     frame: () => ({ k: 1 }), useNumbers: () => false,
   });

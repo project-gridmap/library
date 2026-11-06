@@ -2,7 +2,9 @@
 
 import { mergeSegments, ownedBorderSegments, rectangleSegments } from './lines.js';
 import { surfaceColour, sectionSurfaceOpacity } from './surfaces.js';
-import { fitLabel, fitSectionLabel } from './labels.js';
+import { anchoredBoundaryLabelPosition, boundaryLabelAnchor, fitLabel, fitSectionLabel } from './labels.js';
+import { markerAttention, resolveAttention, sectionBorderParts } from './attention.js';
+import { parentFocus, rebindFocus, resolveFocus } from './navigation.js';
 
 import {
   DEFAULT_FIT_RATIOS, DEFAULT_SECTION_GAP, DEFAULT_SECTION_PADDING, DEFAULT_WORLDS, buildGridmapModel, cellAt, coverCells, fitWorld, normaliseGridmapData, pickFitRatio,
@@ -58,7 +60,9 @@ const DEFAULT_OPTIONS = {
   markMaxSize: 0.4,
   numberMinPx: 8,
   itemLabels: 'short',
+  semanticZoom: false,
   history: false,
+  focusOpacity: 0.16,
   // Items' `sections`: dotted partitions in the item's colour, with small
   // labels on their borders. The gap between sections and the padding around
   // them (fractions of a cell's side) reshape the layout. Off by default.
@@ -133,6 +137,7 @@ export class Gridmap {
     this.disabled = new Set((this.options.disabledCells ?? []).map(String));
     this.disabledCover = null;
     this.itemLabelForms = new WeakMap();
+    this.divisionLabelAnchors = new WeakMap();
     this.tooltipTimer = null;
 
     this.mount();
@@ -202,7 +207,10 @@ export class Gridmap {
       pointerleave: (event) => this.onPointerLeave(event),
       wheel: (event) => this.onWheel(event),
       keydown: (event) => {
-        if (event.key === 'Escape') this.focusMap();
+        if (event.key === 'Escape' && !event.defaultPrevented) {
+          event.preventDefault();
+          this.focusParent();
+        }
       },
     };
 
@@ -264,23 +272,21 @@ export class Gridmap {
     const old = this.model;
     this.model = this.modelFor(name);
     this.borderSegments = ownedBorderSegments(this.model.items, this.model.layers);
+    let changedFocus = false;
     if (old && old !== this.model) {
-      const same = (collection, entity) => (entity ? this.model[collection][entity.index] : null);
       this.state.hover = null;
-      this.state.selected = same('cells', this.state.selected);
-      const focus = this.state.focus;
-      this.state.focus = {
-        level: focus.level,
-        group: same('groups', focus.group),
-        item: same('items', focus.item),
-        cell: same('cells', focus.cell),
-      };
+      const selectedId = this.state.selected?.id;
+      this.state.selected = this.model.cells.find((cell) => cell.id === selectedId) ?? null;
+      const previous = this.state.focus;
+      this.state.focus = rebindFocus(this.model, previous);
+      changedFocus = previous.level !== this.state.focus.level;
     }
     this.disabledCover = null;
     this.pressedCell = null;
     this.prepareMarks();
     Object.assign(this.camera, this.cameraForFocus(), { free: false });
     this.resize();
+    if (changedFocus) this.emit('focusChange', this.state.focus);
   }
 
   prepareMarks() {
@@ -464,7 +470,24 @@ export class Gridmap {
     const region = this.focusRegion();
     const inside = region?.some((r) => target.x >= r.x && target.x < r.x + r.width
       && target.y >= r.y && target.y < r.y + r.height);
-    return region && !inside ? surfaceColour(theme.background, surface, 0.66) : surface;
+    return region && !inside ? surfaceColour(theme.background, surface, this.focusOpacity()) : surface;
+  }
+
+  attentionState() {
+    return resolveAttention(this.model, this.state.focus, this.activeMarker());
+  }
+
+  focusOpacity() {
+    return Math.min(1, Math.max(0, this.options.focusOpacity ?? 0.16));
+  }
+
+  labelContext(attention, item, section = null) {
+    if (!attention.focused) return 1;
+    if (!attention.focused.has(item.index)) return 1 - this.focusOpacity();
+    if (section && attention.focusedSection != null && section.index !== attention.focusedSection) {
+      return 1 - this.focusOpacity();
+    }
+    return 1;
   }
 
   glow() {
@@ -542,6 +565,8 @@ export class Gridmap {
   focusRegion() {
     const focus = this.state.focus;
     if (focus.level === 'cell') return [focus.cell];
+    if (focus.level === 'section') return [focus.section];
+    if (focus.level === 'layer') return [focus.layer];
     if (focus.level === 'item') return [focus.item];
     if (focus.level === 'group') return focus.group.items;
     return null;
@@ -550,36 +575,35 @@ export class Gridmap {
   cameraForFocus() {
     const focus = this.state.focus;
     if (focus.level === 'cell') return this.frame(focus.cell, 0.42);
+    if (focus.level === 'section') return this.frame(focus.section, 0.8);
+    if (focus.level === 'layer') return this.frame(focus.layer, 0.94);
     if (focus.level === 'item') return this.frame(focus.item, 0.72);
     if (focus.level === 'group') return this.frame(focus.group.bounds, 0.9);
     return this.frame(this.model.world, this.options.layout === 'fit' ? 1 : 0.92);
   }
 
   setFocus(level, value = null) {
-    const focus = { level };
-    if (level === 'group') focus.group = typeof value === 'string'
-      ? this.model.groups.find((group) => group.uid === value || group.id === value)
-      : value;
-    if (level === 'item') focus.item = typeof value === 'string'
-      ? this.model.items.find((item) => item.id === value)
-      : value;
-    if (level === 'cell') focus.cell = typeof value === 'string'
-      ? this.model.cells.find((cell) => cell.id === value)
-      : value;
-    if ((level !== 'map' && !focus[level])) return false;
-    if (focus.item) focus.group = this.model.groups[focus.item.groupIndex];
-    if (focus.cell) {
-      focus.item = this.model.items[focus.cell.itemIndex];
-      focus.group = this.model.groups[focus.cell.groupIndex];
-    }
+    const focus = resolveFocus(this.model, level, value);
+    if (!focus) return false;
     this.state.focus = focus;
+    this.state.hover = null;
+    this.pressedCell = null;
+    this.showTooltip(null);
+    this.root.style.cursor = '';
     Object.assign(this.camera, this.cameraForFocus(), { free: false });
     this.emit('focusChange', focus);
     this.render();
     return true;
   }
 
+  getFocus() { return this.state.focus; }
   focusMap() { return this.setFocus('map'); }
+  focusLayer(idOrLayer) { return this.setFocus('layer', idOrLayer); }
+  focusSection(idOrSection) { return this.setFocus('section', idOrSection); }
+  focusParent() {
+    const focus = parentFocus(this.model, this.state.focus);
+    return this.setFocus(focus.level, focus[focus.level]);
+  }
   focusGroup(idOrGroup) { return this.setFocus('group', idOrGroup); }
   focusItem(idOrItem) { return this.setFocus('item', idOrItem); }
   focusCell(idOrCell) { return this.setFocus('cell', idOrCell); }
@@ -599,6 +623,8 @@ export class Gridmap {
     const cell = cellAt(this.model, this.toWorldX(sx), this.toWorldY(sy));
     const focus = this.state.focus;
     if (focus.level === 'cell') return cell === focus.cell ? cell : null;
+    if (focus.level === 'section') return cell && cell.sectionIndex === focus.section.index ? cell : null;
+    if (focus.level === 'layer') return cell && cell.layerIndex === focus.layer.index ? cell : null;
     if (focus.level === 'item') return cell && cell.itemIndex === focus.item.index ? cell : null;
     if (focus.level === 'group') return cell && cell.groupIndex === focus.group.index ? cell : null;
     return cell;
@@ -638,6 +664,7 @@ export class Gridmap {
 
   startGesture() {
     this.clearPressedCell();
+    this.clearHover();
     const points = this.gesturePoints();
     if (!points || points.distance <= 0) return;
     this.drag = null;
@@ -699,6 +726,7 @@ export class Gridmap {
       if (Math.hypot(dx, dy) > 4) this.drag.moved = true;
       if (this.drag.moved) {
         this.clearPressedCell();
+        this.clearHover();
         const cam = this.drag.cam;
         this.setCamera(cam.cx - dx / cam.k, cam.cy - dy / cam.k, cam.k);
       }
@@ -740,7 +768,7 @@ export class Gridmap {
       const cell = this.hitTest(point.x, point.y);
       if (cell && this.isCellDisabled(cell)) this.refuseCell(cell, point, event.pointerType);
       else if (cell) this.selectCell(cell);
-      else this.focusMap();
+      else this.focusParent();
     }
   }
 
@@ -780,10 +808,17 @@ export class Gridmap {
     this.requestRender();
   }
 
+  clearHover() {
+    if (!this.state.hover) return;
+    this.state.hover = null;
+    this.root.style.cursor = '';
+    this.showTooltip(null);
+    this.emit('hoverCell', null);
+  }
+
   onPointerLeave() {
     if (this.pointers.size) return;
-    this.state.hover = null;
-    this.showTooltip(null);
+    this.clearHover();
     this.render();
   }
 
@@ -859,6 +894,7 @@ export class Gridmap {
     ctx.setLineDash([]);
 
     const visibleItems = this.model.items.filter(onScreen);
+    const attention = this.attentionState();
 
     // Stable item fields and repeating section tones sit below every mark,
     // border and interaction layer. Neither changes the model geometry.
@@ -874,7 +910,7 @@ export class Gridmap {
       }
     }
 
-    const hover = this.state.hover;
+    const hover = this.activeMarker();
     if (hover) {
       ctx.fillStyle = theme.text;
       ctx.globalAlpha = 0.07;
@@ -902,24 +938,18 @@ export class Gridmap {
       ? Math.min(1, Math.max(0, (this.model.cellSide * k - 3) / 6))
       : 0;
     if (sectionAlpha > 0) {
-      ctx.globalAlpha = sectionAlpha * (this.part('sections').opacity ?? 0.3);
       ctx.lineWidth = 0.75;
       ctx.setLineDash([1.5, 3]);
       for (const item of visibleItems) {
         if (!item.inner) continue;
+        const section = attention.section?.itemIndex === item.index ? attention.section : null;
+        const parts = sectionBorderParts(item, section);
+        const opacity = this.part('sections').opacity ?? 0.3;
         ctx.strokeStyle = this.partColour('sections', item, theme.sectionLine);
-        ctx.beginPath();
-        if (item.openFrame) {
-          ctx.moveTo(X(item.inner.x), Y(item.inner.y));
-          ctx.lineTo(X(item.inner.x + item.inner.width), Y(item.inner.y));
-        } else {
-          rect(item.inner);
-        }
-        for (const d of item.dividers) {
-          ctx.moveTo(X(d.x1), Y(d.y1));
-          ctx.lineTo(X(d.x2), Y(d.y2));
-        }
-        ctx.stroke();
+        ctx.globalAlpha = sectionAlpha * opacity;
+        strokeSegments(parts.resting);
+        ctx.globalAlpha = sectionAlpha * Math.min(1, opacity * 15 / 11);
+        strokeSegments(parts.active);
       }
       ctx.setLineDash([]);
     }
@@ -936,10 +966,12 @@ export class Gridmap {
       const colours = new Map();
       for (const segment of this.borderSegments[level]) {
         const colour = this.partColour('borders', segment.owner, neutral);
-        if (!colours.has(colour)) colours.set(colour, []);
-        colours.get(colour).push(segment);
+        const emphasised = segment.itemIndices.some((index) => attention.items.has(index));
+        const key = JSON.stringify([colour, emphasised]);
+        if (!colours.has(key)) colours.set(key, { colour, segments: [], emphasised });
+        colours.get(key).segments.push(segment);
       }
-      for (const [colour, segments] of colours) batches.push({ colour, segments, width, opacity });
+      for (const batch of colours.values()) batches.push({ ...batch, width, opacity });
     }
     if (glow > 0 && this.part('borders').coloured) for (const batch of batches) {
       ctx.strokeStyle = batch.colour;
@@ -952,7 +984,7 @@ export class Gridmap {
     }
     for (const batch of batches) {
       ctx.strokeStyle = batch.colour;
-      ctx.globalAlpha = batch.opacity * (this.part('borders').opacity ?? 1);
+      ctx.globalAlpha = batch.opacity * Math.min(1, (this.part('borders').opacity ?? 1) * (batch.emphasised ? 25 / 23 : 1));
       ctx.lineWidth = batch.width;
       strokeSegments(batch.segments);
     }
@@ -975,7 +1007,7 @@ export class Gridmap {
       ctx.shadowBlur = 0;
     }
 
-    if (this.options.showMarks) this.renderMarks(ctx, X, Y, onScreen);
+    if (this.options.showMarks) this.renderMarks(ctx, X, Y, onScreen, attention);
     this.renderDisabled(ctx, rect, onScreen);
 
     for (const layer of this.layers) {
@@ -993,7 +1025,7 @@ export class Gridmap {
     }
 
     this.renderVeil(ctx, rect);
-    this.renderLabels(X, Y);
+    this.renderLabels(X, Y, attention);
     if (this.labelBackground() === 'transparent') this.cutBehindLabels(ctx);
   }
 
@@ -1035,7 +1067,7 @@ export class Gridmap {
     return this.options.markType === 'number' && this.medianNumberSize * this.camera.k >= this.options.numberMinPx;
   }
 
-  renderMarks(ctx, X, Y, onScreen) {
+  renderMarks(ctx, X, Y, onScreen, attention = this.attentionState()) {
     const theme = this.options.theme;
     const useNumbers = this.useNumbers();
     const worldK = this.frame(this.model.world).k;
@@ -1048,7 +1080,8 @@ export class Gridmap {
     ctx.textBaseline = 'middle';
     const markOpacity = this.part('marks').opacity ?? this.options.markOpacity;
     const dotOpacity = Math.min(1, Math.max(0, this.options.dotOpacity ?? markOpacity * 17 / 14));
-    const active = this.activeMarker();
+    const target = this.activeMarker() ?? attention.cell;
+    const active = target && !this.isCellDisabled(target) ? target : null;
     for (const item of this.model.items) {
       const numberColour = this.partColour('marks', item, theme.text);
       const dotColour = this.part('marks').coloured ? numberColour
@@ -1057,8 +1090,11 @@ export class Gridmap {
         if (!onScreen(cell)) continue;
         const chosen = cell === this.state.selected;
         const strong = cell === active || chosen;
-        ctx.globalAlpha = useNumbers || chosen ? (strong ? 1 : markOpacity)
-          : cell === active ? Math.min(1, Math.max(0.7, dotOpacity * 1.5)) : dotOpacity;
+        const context = this.isCellDisabled(cell) ? 0 : markerAttention(cell, attention);
+        const resting = useNumbers ? Math.min(1, markOpacity * (1 + context / 7))
+          : Math.min(1, dotOpacity * (1 + context * 2 / 17));
+        ctx.globalAlpha = chosen ? 1 : useNumbers ? (strong ? 1 : resting)
+          : cell === active ? Math.min(1, Math.max(0.7, dotOpacity * 1.5)) : resting;
         // On its filled cell the selected mark is dark, so it reads against the colour.
         ctx.fillStyle = chosen ? theme.selectedMark : useNumbers ? numberColour : dotColour;
         // A selected dot grows, and becomes its number where the cell is big enough to read one.
@@ -1080,7 +1116,7 @@ export class Gridmap {
       }
     }
 
-    this.renderMarkEmphasis(ctx, X, Y, useNumbers, dot);
+    this.renderMarkEmphasis(ctx, X, Y, useNumbers, dot, active);
     ctx.globalAlpha = 1;
   }
 
@@ -1090,8 +1126,7 @@ export class Gridmap {
     return cell && !this.isCellDisabled(cell) ? cell : null;
   }
 
-  renderMarkEmphasis(ctx, X, Y, useNumbers, dot) {
-    const hover = this.activeMarker();
+  renderMarkEmphasis(ctx, X, Y, useNumbers, dot, hover = this.activeMarker()) {
     if (useNumbers || !hover || hover === this.state.selected) return;
     const radius = dot * this.markScale(hover) / 2;
     const width = 0.75;
@@ -1132,7 +1167,7 @@ export class Gridmap {
     const { w, h } = this.viewport();
     ctx.fillStyle = this.transparent() ? '#000' : this.options.theme.background;
     if (this.transparent()) ctx.globalCompositeOperation = 'destination-out';
-    ctx.globalAlpha = 0.66;
+    ctx.globalAlpha = this.focusOpacity();
     ctx.beginPath();
     ctx.rect(0, 0, w, h);
     region.forEach(rect);
@@ -1152,7 +1187,59 @@ export class Gridmap {
     };
   }
 
-  renderLabels(X, Y) {
+  semanticOverview() {
+    if (!this.options.semanticZoom) return false;
+    if (['item', 'section', 'cell'].includes(this.state.focus.level)) return false;
+    const pixels = this.medianNumberSize * this.camera.k;
+    const threshold = this.options.numberMinPx;
+    this.semanticDetail = this.semanticDetail ? pixels >= threshold - 0.75 : pixels >= threshold + 0.75;
+    return !this.semanticDetail;
+  }
+
+  divisionAnchors(measure, sizes, lineHeight) {
+    if (this.divisionLabelAnchors.has(this.model)) return this.divisionLabelAnchors.get(this.model);
+    // Use the same neutral whole-map view even when the page opens directly
+    // into a focused book. Hover and the current camera cannot choose anchors.
+    const { w, h } = this.viewport();
+    const camera = this.frame(this.model.world, this.options.layout === 'fit' ? 1 : 0.92);
+    const X = (x) => (x - camera.cx) * camera.k + w / 2;
+    const Y = (y) => (y - camera.cy) * camera.k + h / 2;
+    const occupied = [];
+    const verticals = Object.values(this.borderSegments).flat().filter((edge) => Math.abs(edge.x1 - edge.x2) < 1e-6);
+    for (const item of this.model.items) {
+      if (item.height * camera.k < sizes.item * 2.4) continue;
+      const numberWidth = measure(String(item.index + 1), sizes.number, 0.03, 400);
+      const custom = this.options.labels.item;
+      const name = typeof custom === 'function' ? custom(item, this) : item.shortLabel;
+      const candidates = name ? [{ width: numberWidth + 5 + measure(String(name).toUpperCase(), sizes.item, 0.09) }] : [];
+      candidates.push({ width: numberWidth });
+      const end = verticals.filter((edge) => edge.x1 > item.x + 6 / camera.k && edge.x1 < item.x + item.width
+        && (Math.abs(edge.y1 - item.y) < 1e-6 || Math.abs(edge.y2 - item.y) < 1e-6))
+        .reduce((right, edge) => Math.min(right, edge.x1), item.x + item.width);
+      const chosen = candidates.find((candidate) => candidate.width + 24 <= (end - item.x) * camera.k);
+      if (chosen) occupied.push({ x: X(item.x) + 6, y: Y(item.y) - lineHeight / 2, width: chosen.width + 8, height: lineHeight });
+    }
+    const anchors = new Map();
+    for (const group of this.model.groups) {
+      const width = measure(group.label.toUpperCase(), sizes.item, 0.12, 500) + 8;
+      const edges = group.outline.map((edge) => ({ x1: X(edge.x1), y1: Y(edge.y1), x2: X(edge.x2), y2: Y(edge.y2) }));
+      const anchor = boundaryLabelAnchor(edges, width, lineHeight, occupied, { w, h });
+      if (!anchor) continue;
+      anchors.set(group.index, {
+        x: (anchor.x - w / 2) / camera.k + camera.cx,
+        y: (anchor.y - h / 2) / camera.k + camera.cy,
+        left: (anchor.left - w / 2) / camera.k + camera.cx,
+        right: (anchor.right - w / 2) / camera.k + camera.cx,
+      });
+      const box = anchoredBoundaryLabelPosition(anchor, width, lineHeight, occupied, { w, h });
+      if (box) occupied.push(box);
+    }
+    this.divisionLabelAnchors.set(this.model, anchors);
+    return anchors;
+  }
+
+  renderLabels(X, Y, attention = this.attentionState()) {
+    const overview = this.semanticOverview();
     const sizes = this.labelSizes();
     const lineHeight = Math.ceil(sizes.item * 1.35);
     const labelItem = this.options.labels.item;
@@ -1161,7 +1248,6 @@ export class Gridmap {
       return this.ctx.measureText(text).width + Math.max(0, text.length - 1) * size * spacing;
     };
     const selected = this.state.selected;
-    const hover = this.state.hover;
     const cover = this.disabled.size ? this.getDisabledCover() : null;
     const faded = 1 - Math.min(1, Math.max(0, Number(this.options.disabledOpacity) || 0));
     this.overlay.replaceChildren();
@@ -1183,7 +1269,9 @@ export class Gridmap {
         fontSize: `${sizes.layer}px`,
         letterSpacing: '0.32em',
         whiteSpace: 'nowrap',
-        opacity: cover?.layers.has(layer.index) ? String(faded) : '',
+        opacity: cover?.layers.has(layer.index) ? String(faded)
+          : attention.focused && !layer.items.some((item) => attention.focused.has(item.index))
+            ? String(1 - this.focusOpacity()) : '',
       });
     }
 
@@ -1195,7 +1283,8 @@ export class Gridmap {
       const numberWidth = measure(number, sizes.number, 0.03, 400);
       const names = (typeof labelItem === 'function'
         ? [labelItem(item, this)]
-        : this.options.itemLabels === 'short' ? [item.shortLabel] : [item.label, item.shortLabel])
+        : this.options.itemLabels === 'short' || (overview && !attention.items.has(item.index))
+          ? [item.shortLabel] : [item.label, item.shortLabel])
         .filter(Boolean).map((name) => String(name).toUpperCase());
       const candidates = [...new Set(names)].map((name) => ({
         key: name, name, width: numberWidth + 5 + measure(name, sizes.item, 0.09),
@@ -1233,7 +1322,9 @@ export class Gridmap {
         overflow: 'hidden',
         whiteSpace: 'nowrap',
         textOverflow: 'clip',
-        color: this.partColour('labels', item, this.options.theme.mutedText),
+        color: attention.items.has(item.index)
+          ? surfaceColour(this.options.theme.text, this.partColour('labels', item, this.options.theme.mutedText), 0.06)
+          : this.partColour('labels', item, this.options.theme.mutedText),
         fontWeight: String(this.options.theme.labelWeight ?? 500),
         textShadow: labelGlow(this.colourOf(item, null), this.glow()),
         background: this.labelBackground(item),
@@ -1242,18 +1333,43 @@ export class Gridmap {
         letterSpacing: '0.09em',
         lineHeight: `${lineHeight}px`,
         opacity: cover?.items.has(item.index) ? String(faded)
-          : selected?.itemIndex === item.index || hover?.itemIndex === item.index ? '1' : String(this.part('labels').opacity ?? 0.88),
+          : String((selected?.itemIndex === item.index || attention.items.has(item.index) ? 1
+            : this.part('labels').opacity ?? 0.88) * this.labelContext(attention, item)),
       });
     }
 
-    if (this.options.showSections) this.renderSectionLabels(X, Y, cover, faded, occupied);
+    if (this.options.semanticZoom) {
+      const anchors = this.divisionAnchors(measure, sizes, lineHeight);
+      for (const group of this.model.groups) {
+        if (!overview && !group.items.some((item) => attention.items.has(item.index))) continue;
+        const text = group.label.toUpperCase();
+        const width = measure(text, sizes.item, 0.12, 500) + 8;
+        const anchor = anchors.get(group.index);
+        if (!anchor) continue;
+        const projected = { x: X(anchor.x), y: Y(anchor.y), left: X(anchor.left), right: X(anchor.right) };
+        const box = anchoredBoundaryLabelPosition(projected, width, lineHeight, occupied, this.viewport());
+        if (!box) continue;
+        const el = createElement('div', { text }, this.overlay);
+        Object.assign(el.style, {
+          position: 'absolute', left: `${box.x}px`, top: `${box.y}px`,
+          padding: '0 4px', fontSize: `${sizes.item}px`, lineHeight: `${lineHeight}px`,
+          fontWeight: '500', letterSpacing: '0.12em', whiteSpace: 'nowrap',
+          color: this.options.theme.selectedMark,
+          background: surfaceColour(this.partColour('labels', group.items[0], this.options.theme.mutedText), this.options.theme.selectedMark, 0.82),
+          borderRadius: '1px',
+          opacity: String(0.9 * this.labelContext(attention, group.items[0])),
+        });
+        occupied.push(box);
+      }
+    }
+    if (this.options.showSections) this.renderSectionLabels(X, Y, cover, faded, occupied, attention);
   }
 
   // Small labels on each named section's top border, like the item label on
   // the item's: in the item's colour, muted. They sit in the item's padding,
   // so they show only once the padding is deep enough to hold one clear of
   // the item label, and where the text fits.
-  renderSectionLabels(X, Y, cover, faded, occupied = []) {
+  renderSectionLabels(X, Y, cover, faded, occupied = [], attention = this.attentionState()) {
     const k = this.camera.k;
     const labelSection = this.options.labels.section;
     const size = this.labelSizes().section;
@@ -1305,7 +1421,8 @@ export class Gridmap {
         fontSize: `${size}px`,
         letterSpacing: '0.06em',
         lineHeight: '1.2',
-        opacity: cover?.items.has(section.itemIndex) ? String(faded) : '0.82',
+        opacity: cover?.items.has(section.itemIndex) ? String(faded)
+          : String((attention.section === section ? 0.95 : 0.82) * this.labelContext(attention, item, section)),
       });
     }
   }
