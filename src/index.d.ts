@@ -218,8 +218,26 @@ export type GridmapLayerPainter = (args: {
   toScreenX: (x: number) => number;
   toScreenY: (y: number) => number;
   colourOf: (entity: GridmapCell | GridmapItem, fallback?: string) => string;
+  /** The radius, in screen px, the library gives this cell's dot at the current zoom: a size to draw marks by. */
+  markRadius: (cell: GridmapCell) => number;
+  map: Gridmap;
   theme: GridmapTheme;
 }) => void;
+
+export type GridmapCamera = { cx: number; cy: number; k: number };
+
+export type GridmapCameraChange = GridmapCamera & {
+  previous: GridmapCamera;
+  /** 'user': a drag, pinch or scroll. 'focus': a jump to a focus. 'glide': a glideTo frame. 'api': setCamera. */
+  source: 'user' | 'focus' | 'glide' | 'resize' | 'api';
+};
+
+export type GridmapGlideOptions = {
+  /** Milliseconds. Default 1000; 0 jumps. Reduced motion always jumps. */
+  duration?: number;
+  /** Where the glide starts, default the current camera: e.g. the camera from before a jump the host has just made. */
+  from?: GridmapCamera;
+};
 
 export type GridmapOptions = {
   container: HTMLElement;
@@ -298,6 +316,9 @@ export type GridmapOptions = {
   /** A disabled cell was tapped; the selection is unchanged. */
   onSelectDisabledCell?: (cell: GridmapCell, map: Gridmap) => void;
   onFocusChange?: (focus: GridmapFocus, map: Gridmap) => void;
+  /** The camera moved: by the user, a focus, a glide, a resize or setCamera. Fires for every drag and pinch frame. */
+  onCameraChange?: (change: GridmapCameraChange, map: Gridmap) => void;
+  onDestroy?: (map: Gridmap) => void;
   onDataChange?: (data: GridmapData, map: Gridmap) => void;
 };
 
@@ -334,10 +355,21 @@ export function itemsOf(layer: GridmapLayerInput): GridmapItemInput[];
 export function createGridmap(options: GridmapOptions): Gridmap;
 
 export class Gridmap {
+  /** The map mounted in this element, an ancestor or (failing those) a descendant; null if none. */
+  static from(element: Element | null | undefined): Gridmap | null;
   constructor(options: GridmapOptions);
   on(type: string, listener: (payload: unknown, map: Gridmap) => void): () => void;
   off(type: string, listener: (payload: unknown, map: Gridmap) => void): void;
-  addLayer(layer: GridmapLayerPainter): () => void;
+  /** Draws on every render. `above: true` paints after the focus veil, so the layer stays bright where focus fades the map. */
+  addLayer(layer: GridmapLayerPainter, options?: { above?: boolean }): () => void;
+  getCamera(): GridmapCamera;
+  /** Moves the camera; stops any glide. */
+  setCamera(cx: number, cy: number, k: number): void;
+  /** Focuses as setFocus does, easing the camera there. A user move, another focus or setCamera stops it. */
+  glideTo(level: GridmapFocus['level'], value?: string | number | GridmapLayer | GridmapGroup | GridmapItem | GridmapSection | GridmapCell, options?: GridmapGlideOptions): boolean;
+  /** Stops a glide where it is; true if one was moving. */
+  cancelGlide(): boolean;
+  isGliding(): boolean;
   setData(data: GridmapData): void;
   setColours(colours?: Record<string, string>): void;
   setConfig(config?: Partial<GridmapOptions>): void;
