@@ -59,6 +59,7 @@ const DEFAULT_OPTIONS = {
   relativeMarkSize: true,
   markMaxSize: 0.4,
   numberMinPx: 8,
+  maxCellViewportRatio: 0.9,
   itemLabels: 'short',
   semanticZoom: false,
   history: false,
@@ -543,7 +544,8 @@ export class Gridmap {
 
   clampK(k) {
     const min = this.frame(this.model.world).k * 0.55;
-    const max = Math.min(this.viewport().w, this.viewport().h) * 0.9 / this.model.cellSide;
+    const ratio = Number(this.options.maxCellViewportRatio);
+    const max = Math.min(this.viewport().w, this.viewport().h) * (ratio > 0 && Number.isFinite(ratio) ? ratio : 0.9) / this.model.cellSide;
     return Math.min(Math.max(k, min), max);
   }
 

@@ -256,6 +256,8 @@ export type GridmapOptions = {
   relativeMarkSize?: boolean;
   markMaxSize?: number;
   numberMinPx?: number;
+  /** Maximum nominal cell size relative to the viewport's shorter side. Default 0.9. */
+  maxCellViewportRatio?: number;
   itemLabels?: 'short' | 'full';
   /** Prioritise division names and book abbreviations in overview, revealing full book names through closer inspection. Default false. */
   semanticZoom?: boolean;

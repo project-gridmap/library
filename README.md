@@ -332,6 +332,59 @@ retain their existing space-based reveal rules. No region geometry changes.
 The library option defaults to false so other applications can adopt the
 experiment explicitly.
 
+### Chapter text experiment
+
+Enable `?chapterContent=1` and zoom naturally. Visible, enabled chapters in the
+prime book can reveal their full text; other books keep their chapter markers.
+The prime book follows combined visible chapter area and centrality, with a 25%
+switching margin to prevent jitter at boundaries. Keyboard focus within a
+chapter's controls retains its book while it remains eligible. Selection does
+not choose the reading book. Each chapter has independent page controls and remembers
+its reading position. Numeric subscripts identify verses; continuation ellipses
+replace terminal punctuation on nonfinal pages. Selection stays independent,
+and scrolling/pinching/panning remain normal map navigation.
+Chapter text and skeletons retain the original book/group surface, replacing
+the chapter mark without a new reading background. Text contrast stays constant
+across selection and prime focus; the selected boundary remains visible.
+
+The top-right zoom tuner reports overview-relative zoom (`1×` = whole map).
+“Text from” sets the reveal factor; “Use current zoom” captures it. The setting
+is stored in the URL, e.g. `?chapterContent=1&textZoom=5`. Editing it applies a fresh
+admission test. With a manual factor, the previous 25-character / six-line gate
+no longer delays text until much later: compact type progressively grows from
+7 px to the full 14 px reading size as the available cell space increases.
+Tiny cells that cannot hold two lines retain their skeleton instead of clipped
+text. Compact controls scale with the cell and grow to full touch targets;
+page counts hide where they cannot fit alongside both carets. Full-size page
+numbers use 15 px type; drawn caret controls use a larger 32 px scale in a 64 px footer.
+
+For a manual factor of `15`, chapter skeletons and fetching start at `15×`;
+there is no earlier skeleton reveal. Text replaces the skeleton when data is
+ready and a compact passage fits. Loading skeletons use up to six short rows of
+division-tinted word-like strokes, suggesting text without implying verse structure,
+with a gentle 1.8-second opacity pulse, without shimmer or glow. Reduced-motion
+preferences keep them static. They reserve the text footprint with an accessible loading
+status. Existing text survives modest zoom reductions. Requests are cancelled
+when the chapter leaves the preparation region; cached chapters are reused.
+
+`0` retains automatic disclosure based on available reading space: roughly 25
+characters and six body lines to introduce text, with a smaller exit threshold.
+In automatic mode skeletons/fetching begin at the preceding four-line stage.
+In either mode, multiple chapters may appear together; visible area, centre
+proximity and a 25% preference for the existing target determine gentle emphasis
+and fetch priority, not whether neighbours get text or page controls.
+
+The replaceable `loadChapter(cell, { signal })` uses the host's service or the
+cached World English Bible [Bible API](https://bible-api.com/) source. Two requests
+at most are in flight; the public demo spaces requests by 2.1 seconds and keeps
+skeletons visible during rate-limit cooldowns. Timeout and Retry remain available. Disabled chapters and
+content-hidden gameplay reveal/fetch nothing. The query flag is a demo switch,
+not a production gameplay permission policy.
+
+The text-enabled demo allows deeper manual zoom via `maxCellViewportRatio: 1.8`.
+This generic library option limits nominal cell size relative to the viewport's
+shorter side; its default remains `0.9` elsewhere. Camera framing is unchanged.
+
 The existing reference area now exposes a navigable path from testament through
 division, book, named chapter group and chapter. Its second line reveals book
 and chapter counts, group ranges or a chapter's verse count from the existing

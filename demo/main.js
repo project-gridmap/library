@@ -4,10 +4,16 @@ import { bibleToGridmapData } from './adapters/bible-gridmap-adapter.js';
 import { bibleGameOptions } from './bible-game-config.js';
 import { refineMapAppearance } from './appearance.js';
 import { inspectionDetails, inspectionFromHash, inspectionHash, inspectionPath } from './inspection.js';
+import { installChapterDestination } from './chapter-destination.js';
+import { createChapterLoader } from './chapter-source.js';
 
 const $ = (id) => document.getElementById(id);
 const mobile = matchMedia('(max-width: 699px)');
 const coarse = matchMedia('(pointer: coarse)');
+const readingEnabled = new URLSearchParams(location.search).get('chapterContent') === '1';
+const requestedTextZoom = Number(new URLSearchParams(location.search).get('textZoom'));
+let textRevealZoom = Number.isFinite(requestedTextZoom) ? Math.max(0, requestedTextZoom) : 0;
+let currentZoom = 1;
 let map;
 let persistent = { level: 'map' };
 let preview = null;
@@ -114,7 +120,37 @@ async function start() {
   const [bible, colours, groups] = await Promise.all([load('./bible.json'), load('./colours.json'), load('./groups.json')]);
   const options = bibleGameOptions(colours, { mobile: mobile.matches });
   map = createGridmap({ ...refineMapAppearance(options), semanticZoom: true,
+    maxCellViewportRatio: readingEnabled ? 1.8 : 0.9,
     container: $('map'), data: bibleToGridmapData(bible, groups) });
+  installChapterDestination(map, {
+    loadChapter: createChapterLoader(),
+    requestIntervalMs: 2100,
+    revealContent: readingEnabled,
+    getRevealZoom: () => textRevealZoom,
+    onZoom: (zoom) => {
+      currentZoom = zoom;
+      const label = `${zoom.toFixed(2)}×`;
+      if ($('zoom-current').textContent !== label) $('zoom-current').textContent = label;
+    },
+  });
+  if (readingEnabled) {
+    $('zoom-tuner').hidden = false;
+    $('zoom-tuner').open = !mobile.matches;
+    $('text-zoom').value = String(textRevealZoom);
+    const setTextZoom = (value, syncField = true) => {
+      textRevealZoom = Number.isFinite(value) ? Math.max(0, value) : 0;
+      if (syncField) $('text-zoom').value = String(textRevealZoom);
+      const url = new URL(location.href);
+      if (textRevealZoom) url.searchParams.set('textZoom', String(textRevealZoom));
+      else url.searchParams.delete('textZoom');
+      history.replaceState(null, '', url);
+      map.render();
+    };
+    $('text-zoom').addEventListener('input', () => {
+      if (!$('text-zoom').validity.badInput) setTextZoom(Number($('text-zoom').value), false);
+    });
+    $('zoom-use-current').onclick = () => setTextZoom(Math.round(currentZoom * 100) / 100);
+  }
   map.on('dataChange', () => { persistent = map.getFocus(); renderBreadcrumbs(); renderInspector(); });
   map.on('selectCell', (cell) => { clearTimeout(previewTimer); preview = null; persistent = resolveFocus(map.getModel(), 'cell', cell); renderInspector({ alignFocus: true }); });
   map.on('hoverCell', (cell) => {

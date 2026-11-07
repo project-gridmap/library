@@ -43,6 +43,26 @@
     #info .selected { color: var(--ink); }
     #hint { bottom: calc(16px + env(safe-area-inset-bottom)); right: 24px; pointer-events: none; text-align: right; max-width: 36%; }
     .gridmap-tooltip:empty { display: none; }
+    @keyframes chapter-loading-pulse {
+      0%, 100% { opacity: .45; }
+      50% { opacity: 1; }
+    }
+    [data-chapter-id][aria-busy="true"] [data-chapter-skeleton] {
+      animation: chapter-loading-pulse 1.8s ease-in-out infinite;
+    }
+    @media (prefers-reduced-motion: reduce) {
+      [data-chapter-id][aria-busy="true"] [data-chapter-skeleton] { animation: none; }
+    }
+    #zoom-tuner { top: 60px; right: 24px; width: 218px; padding: 10px 12px;
+      border: 1px solid rgba(180,195,255,.18); background: rgba(11,14,24,.94); }
+    #zoom-tuner[hidden] { display: none; }
+    #zoom-tuner summary { cursor: pointer; }
+    #zoom-tuner output { color: var(--ink); font-variant-numeric: tabular-nums; }
+    #zoom-tuner label { display: flex; align-items: center; gap: 8px; margin-top: 10px; }
+    #zoom-tuner input { width: 76px; min-height: 36px; box-sizing: border-box; font: inherit;
+      color: var(--ink); background: transparent; border: 1px solid var(--muted); padding: 4px 6px; }
+    #zoom-tuner button { display: block; min-height: 44px; text-decoration: underline; }
+    #zoom-tuner p { font-size: 9px; letter-spacing: .05em; text-transform: none; margin: 0; }
     @media (max-width: 699px) {
       #map { inset: 60px 4px 98px; }
       #crumbs { left: 16px; right: 16px; }
@@ -50,6 +70,7 @@
       #info .path button, #crumbs button { min-height: 44px; }
       #info .facts { line-height: 1.5; }
       #hint { left: 16px; right: 16px; text-align: left; max-width: none; }
+      #zoom-tuner { top: 72px; right: 12px; }
     }
   </style>
 </head>
@@ -59,6 +80,12 @@
   <nav id="crumbs" class="chrome" aria-label="Map focus"></nav>
   <div id="info" class="chrome" aria-live="polite"></div>
   <div id="hint" class="chrome"></div>
+  <details id="zoom-tuner" class="chrome" hidden>
+    <summary>Zoom <output id="zoom-current">1.00×</output></summary>
+    <label>Text from <input id="text-zoom" type="number" min="0" step="0.1" value="0" aria-label="Chapter text reveal zoom factor">×</label>
+    <button id="zoom-use-current" type="button">Use current zoom</button>
+    <p>1× = whole-map overview.<br>0 = automatic. Manual values reveal compact text that grows with zoom.</p>
+  </details>
   <script type="module" src="./demo/main.js"></script>
 </body>
 </html>
