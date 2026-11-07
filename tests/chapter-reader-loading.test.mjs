@@ -87,6 +87,9 @@ test('natural prime focus waits before fetching, ignores selection, cancels stal
     const body = preview.children[1], footer = preview.children[3];
     assert.equal(body.children[0].children[0].textContent, '1');
     assert.equal(body.children[1].children[0].textContent, '2');
+    const firstVerse = Number(body.children[0].children[0].textContent);
+    const visibleVerses = body.children.flatMap((row) => row.children.filter((child) => typeof child === 'object').map((child) => Number(child.textContent)));
+    assert.equal(footer.children[1].textContent, `${firstVerse}–${visibleVerses.at(-1)}/23`);
     assert.equal(footer.children.length, 3, 'footer contains only previous, page count and next');
     assert.equal(preview.attributes['aria-busy'], 'false');
     assert.equal(map.state.selected, null);
@@ -101,7 +104,7 @@ test('natural prime focus waits before fetching, ignores selection, cancels stal
     calls[3].resolve({ verses: ['The only verse.'] }); await wait();
     assert.ok(read(body).endsWith('The only verse.'));
     assert.equal(footer.style.visibility, 'visible');
-    assert.equal(footer.children[1].textContent, '1 / 1');
+    assert.equal(footer.children[1].textContent, '1/1');
     assert.equal(footer.children[0].disabled, true);
     assert.equal(footer.children[2].disabled, true);
     map.gesture = { moved: true }; map.render();
@@ -145,9 +148,9 @@ test('only the prime book gets chapter views and requests, with independent page
     centre.children[3].children[2].onclick();
     const position = centre.children[3].children[1].textContent;
     const neighbour = roots.find((root) => root.attributes['data-chapter-id'] === 'RUT/1');
-    const initialNeighbourPage = neighbour.children[3].children[1].textContent;
+    const initialNeighbourPage = neighbour.children[1].children;
     neighbour.children[3].children[2].onclick();
-    assert.notEqual(neighbour.children[3].children[1].textContent, initialNeighbourPage);
+    assert.notEqual(neighbour.children[1].children, initialNeighbourPage);
     assert.equal(centre.children[3].children[1].textContent, position, 'paging one cell leaves its neighbour in place');
     offset = -4; map.gesture = { moved: true }; map.render();
     assert.ok(roots.every((root) => root.style.display === 'block'), 'small gestures do not hide existing text');

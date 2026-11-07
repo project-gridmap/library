@@ -346,6 +346,9 @@ and scrolling/pinching/panning remain normal map navigation.
 Chapter text and skeletons retain the original book/group surface, replacing
 the chapter mark without a new reading background. Text contrast stays constant
 across selection and prime focus; the selected boundary remains visible.
+Scripture uses IBM Plex Serif at regular weight; chapter references, subscript
+verse numbers and controls retain the map's IBM Plex Mono. Pagination measures
+the two fonts separately and reflows when web fonts load, retaining the reading anchor.
 
 The top-right zoom tuner reports overview-relative zoom (`1×` = whole map).
 “Text from” sets the reveal factor; “Use current zoom” captures it. The setting
@@ -355,8 +358,10 @@ no longer delays text until much later: compact type progressively grows from
 7 px to the full 14 px reading size as the available cell space increases.
 Tiny cells that cannot hold two lines retain their skeleton instead of clipped
 text. Compact controls scale with the cell and grow to full touch targets;
-page counts hide where they cannot fit alongside both carets. Full-size page
-numbers use 15 px type; drawn caret controls use a larger 32 px scale in a 64 px footer.
+Verse ranges (e.g. `1–2/23`) identify the visible verses out of the chapter total,
+including a verse continued from the preceding page. A single verse reads `3/23`.
+Ranges hide where they cannot fit alongside both carets. Full-size range labels
+use 15 px type; drawn caret controls use a larger 32 px scale in a 64 px footer.
 
 For a manual factor of `15`, chapter skeletons and fetching start at `15×`;
 there is no earlier skeleton reveal. Text replaces the skeleton when data is

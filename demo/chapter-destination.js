@@ -1,3 +1,5 @@
+const SCRIPTURE_FONT = '"IBM Plex Serif", Georgia, serif';
+
 // Every readable chapter in the prime book can become a passage.
 export function chapterTextLayout(box, viewport, { retained = false, characterWidth = 9, progressive = false } = {}) {
   const left = Math.max(0, box.x), top = Math.max(0, box.y);
@@ -58,7 +60,8 @@ export function continuationText(text) {
   return ending.test(value) ? value.replace(ending, '…$1') : `${value}…`;
 }
 
-export function chapterTextPages(verses, width, rows, measure, { numberRatio = 11 / 15, reserve = 32, numberGap = 4 } = {}) {
+export function chapterTextPages(verses, width, rows, measure, { numberRatio = 11 / 15, reserve = 32, numberGap = 4,
+  measureNumber = (text) => measure(text) * numberRatio } = {}) {
   if (width <= 0 || rows < 1) return [];
   const lines = [];
   let offset = 0;
@@ -66,7 +69,7 @@ export function chapterTextPages(verses, width, rows, measure, { numberRatio = 1
     let line;
     for (const word of text.split(/\s+/).filter(Boolean)) {
       const token = { text: word, verse: index + 1, verseStart: !line, offset: offset++ };
-      const numberWidth = !line ? measure(String(index + 1)) * numberRatio + numberGap : 0;
+      const numberWidth = !line ? measureNumber(String(index + 1)) + numberGap : 0;
       const added = measure(word) + numberWidth;
       if (!line || line.width + measure(' ') + added > width - reserve) {
         line = { tokens: [], width: 0 }; lines.push(line);
@@ -98,6 +101,9 @@ export function installChapterDestination(map, { loadChapter, revealContent = fa
   let disposed = false, activeId = null, running = 0, lastCamera = null, allowRequests = true, lastRevealZoom;
   let nextRequestAt = 0, requestTimer;
   let activeBookId = null;
+  let fontRevision = 0;
+  const fontsChanged = () => { if (!disposed) { fontRevision++; map.render(); } };
+  document.fonts?.addEventListener('loadingdone', fontsChanged);
 
   function remove(view) {
     clearTimeout(view.dwell); clearTimeout(view.timeout);
@@ -118,7 +124,7 @@ export function installChapterDestination(map, { loadChapter, revealContent = fa
     const reference = document.createElement('div'), body = document.createElement('div'), status = document.createElement('div');
     Object.assign(reference.style, { height: '32px', fontSize: '12px', letterSpacing: '.08em', overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis' });
     reference.textContent = `${cell.itemLabel} ${cell.label}`;
-    Object.assign(body.style, { whiteSpace: 'nowrap', fontWeight: '400' });
+    Object.assign(body.style, { whiteSpace: 'nowrap', fontWeight: '400', fontFamily: SCRIPTURE_FONT });
     status.setAttribute('role', 'status');
     Object.assign(status.style, { fontSize: '12px', display: 'none', alignItems: 'center', gap: '8px' });
     const skeleton = document.createElement('div'), message = document.createElement('span'), retry = document.createElement('button');
@@ -138,7 +144,7 @@ export function installChapterDestination(map, { loadChapter, revealContent = fa
         transform: `rotate(${direction === 'left' ? -135 : 45}deg)` });
       button.append(caret);
     }
-    Object.assign(pageLabel.style, { fontWeight: '500', fontVariantNumeric: 'tabular-nums', letterSpacing: '.02em' });
+    Object.assign(pageLabel.style, { fontWeight: '500', fontVariantNumeric: 'tabular-nums', letterSpacing: '.02em', whiteSpace: 'nowrap' });
     previous.setAttribute('aria-label', 'Previous chapter page'); next.setAttribute('aria-label', 'Next chapter page');
     for (const button of [previous, next, retry]) {
       Object.assign(button.style, { minWidth: '44px', minHeight: '44px', pointerEvents: 'auto' });
@@ -275,16 +281,23 @@ export function installChapterDestination(map, { loadChapter, revealContent = fa
       view.status.style.height = `${skeletonHeight}px`;
       view.footer.style.height = `${layout.footerHeight}px`;
       view.footer.style.fontSize = `${Math.max(10, layout.fontSize * 15 / 14)}px`;
-      view.pageLabel.style.display = layout.width < 110 ? 'none' : '';
       for (const button of [view.previous, view.next]) Object.assign(button.style, {
         minWidth: `${Math.min(44, layout.width / 3)}px`, minHeight: `${layout.footerHeight}px`,
         fontSize: `${Math.max(20, layout.fontSize * 32 / 14)}px` });
       const numberSize = Math.max(6, layout.fontSize * 11 / 15), numberGap = layout.fontSize < 11 ? 2 : 4;
-      ctx.font = `400 ${layout.fontSize}px ${theme.font}`;
+      ctx.font = `400 ${layout.fontSize}px ${SCRIPTURE_FONT}`;
       if (showText) {
-        const key = `${layout.width.toFixed(1)}:${layout.rows}:${layout.fontSize}:${theme.font}:${accent}:${view.anchor}`;
+        const key = `${layout.width.toFixed(1)}:${layout.rows}:${layout.fontSize}:${theme.font}:${fontRevision}:${accent}:${view.anchor}`;
         if (view.key !== key) {
-          view.pages = chapterTextPages(view.verses, layout.width, layout.rows, (text) => ctx.measureText(text).width, { numberRatio: numberSize / layout.fontSize, reserve: layout.fontSize * 32 / 15, numberGap });
+          view.pages = chapterTextPages(view.verses, layout.width, layout.rows, (text) => ctx.measureText(text).width, {
+            reserve: layout.fontSize * 32 / 15, numberGap,
+            measureNumber: (text) => {
+              ctx.font = `400 ${numberSize}px ${theme.font}`;
+              const width = ctx.measureText(text).width;
+              ctx.font = `400 ${layout.fontSize}px ${SCRIPTURE_FONT}`;
+              return width;
+            },
+          });
           view.pageIndex = Math.max(0, view.pages.findIndex((page) => view.anchor >= page.start && view.anchor < page.end));
           const page = view.pages[view.pageIndex], more = view.pageIndex < view.pages.length - 1;
           view.body.replaceChildren();
@@ -294,7 +307,7 @@ export function installChapterDestination(map, { loadChapter, revealContent = fa
               if (index) row.append(' ');
               if (token.verseStart || (rowIndex === 0 && index === 0)) {
                 const number = document.createElement('sub'); number.textContent = String(token.verse);
-                Object.assign(number.style, { fontSize: `${numberSize}px`, lineHeight: '0', verticalAlign: 'baseline', position: 'relative', top: `${Math.max(1, layout.fontSize * 2 / 15)}px`, marginRight: `${numberGap}px`, color: accent });
+                Object.assign(number.style, { fontFamily: theme.font, fontSize: `${numberSize}px`, lineHeight: '0', verticalAlign: 'baseline', position: 'relative', top: `${Math.max(1, layout.fontSize * 2 / 15)}px`, marginRight: `${numberGap}px`, color: accent });
                 row.append(number);
               }
               const last = rowIndex === page.lines.length - 1 && index === line.tokens.length - 1;
@@ -302,13 +315,18 @@ export function installChapterDestination(map, { loadChapter, revealContent = fa
             });
             view.body.append(row);
           });
-          view.pageLabel.textContent = `${view.pageIndex + 1} / ${view.pages.length}`;
+          const firstVerse = page.lines[0].tokens[0].verse;
+          const lastVerse = page.lines.at(-1).tokens.at(-1).verse;
+          view.pageLabel.textContent = `${firstVerse === lastVerse ? firstVerse : `${firstVerse}–${lastVerse}`}/${view.verses.length}`;
+          view.pageLabel.setAttribute('aria-label', `${firstVerse === lastVerse ? `Verse ${firstVerse}` : `Verses ${firstVerse} to ${lastVerse}`} of ${view.verses.length}`);
           view.previous.disabled = view.pageIndex === 0; view.next.disabled = !more;
           view.previous.style.opacity = view.previous.disabled ? '.25' : '1'; view.next.style.opacity = view.next.disabled ? '.25' : '1';
           view.key = key;
         }
       }
       const controls = showText && view.pages.length > 0;
+      const rangeWidth = (view.pageLabel.textContent?.length ?? 0) * Math.max(10, layout.fontSize * 15 / 14) * 0.65;
+      view.pageLabel.style.display = layout.width < rangeWidth + 2 * Math.min(44, layout.width / 3) + 12 ? 'none' : '';
       view.footer.style.visibility = controls ? 'visible' : 'hidden';
       view.retry.style.display = view.state === 'error' ? 'block' : 'none';
       const preparing = !showText && view.state !== 'error';
@@ -340,5 +358,10 @@ export function installChapterDestination(map, { loadChapter, revealContent = fa
       }
     }
   });
-  return () => { disposed = true; clearTimeout(requestTimer); for (const view of [...views.values()]) remove(view); removeLayer(); };
+  return () => {
+    disposed = true; clearTimeout(requestTimer);
+    document.fonts?.removeEventListener('loadingdone', fontsChanged);
+    for (const view of [...views.values()]) remove(view);
+    removeLayer();
+  };
 }
