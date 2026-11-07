@@ -72,13 +72,29 @@ map.selectCell('lesson-1.2');
 map.setDisabledCells(['lesson-1.1']);
 map.isCellDisabled('lesson-1.1'); // true
 map.addLayer((helpers) => {});
+map.addLayer((helpers) => {}, { above: true }); // after the focus veil
+map.glideTo('item', 'lesson-1', { duration: 800 }); // focusItem, eased
+map.cancelGlide();
+map.getCamera(); // { cx, cy, k }
+map.on('cameraChange', ({ k, previous, source }) => {}); // source: 'user' | 'focus' | 'glide' | 'resize' | 'api'
+Gridmap.from(element); // the map mounted in or around an element
 map.setData(data);
 map.setColours(colours);
-map.destroy();
+map.destroy(); // emits 'destroy'
 ```
 
 Custom layers let applications draw domain-specific overlays without adding
-domain language to the library.
+domain language to the library. Layers paint under the focus veil, so focus
+fades them with the map; `{ above: true }` paints after it, for marks that must
+stay bright. Painters get `markRadius(cell)`, the dot radius at the current zoom,
+to size marks by.
+
+`glideTo` takes the same arguments as `setFocus` and an options object. The
+focus changes at once and the camera eases to where `setFocus` would leave it,
+from `options.from` if given. A tap, drag, pinch or scroll, another focus or
+`setCamera` stops it; under reduced motion it jumps. `cameraChange` reports
+every camera move with its source, so a host can tell the user's zooms from its
+own.
 
 ## Colour
 

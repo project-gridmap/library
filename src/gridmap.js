@@ -109,12 +109,33 @@ const labelGlow = (colour, glow) => (colour && glow > 0
   ? `0 0 ${6 * glow}px ${colour}, 0 0 ${14 * glow}px ${colour}`
   : 'none');
 
+// Containers with a map mounted in them, so a host can find the map from its page (Gridmap.from).
+const mounted = new WeakMap();
+
+// Glides ease in and out; the zoom moves by its ratio, so it feels even at every scale.
+const easeInOut = (t) => (t < 0.5 ? 4 * t * t * t : 1 - (-2 * t + 2) ** 3 / 2);
+const cameraOf = (camera) => ({ cx: camera.cx, cy: camera.cy, k: camera.k });
+
 const median = (values, fallback = 1) => {
   const sorted = values.filter((value) => Number.isFinite(value)).sort((a, b) => a - b);
   return sorted.length ? sorted[sorted.length >> 1] : fallback;
 };
 
 export class Gridmap {
+  /**
+   * The map mounted in this element, in one of its ancestors, or (failing those) in one of its descendants: how a host
+   * reaches a map that a component it doesn't own has made.
+   */
+  static from(element) {
+    for (let el = element; el; el = el.parentElement) {
+      const map = mounted.get(el);
+      if (map && !map.destroyed) return map;
+    }
+    const root = element?.querySelector?.('.gridmap-root');
+    const map = root ? mounted.get(root.parentElement) : null;
+    return map && !map.destroyed ? map : null;
+  }
+
   constructor(options) {
     if (!options?.container) throw new TypeError('createGridmap requires a container element');
     if (!options?.data) throw new TypeError('createGridmap requires data');
@@ -127,6 +148,8 @@ export class Gridmap {
     this.camera = { cx: 0, cy: 0, k: 1, free: false };
     this.state = { hover: null, selected: null, focus: { level: 'map' } };
     this.layers = new Set();
+    this.layersAbove = new Set();
+    this.glide = null;
     this.listeners = new Map();
     this.frameRequested = false;
     this.destroyed = false;
@@ -142,6 +165,7 @@ export class Gridmap {
     this.tooltipTimer = null;
 
     this.mount();
+    mounted.set(this.container, this);
     this.rebuildModels();
     this.useLayout(this.layoutName());
     this.bind();
@@ -336,8 +360,10 @@ export class Gridmap {
     if (this.canvas.width !== width) this.canvas.width = width;
     if (this.canvas.height !== height) this.canvas.height = height;
     this.dpr = dpr;
+    const previous = cameraOf(this.camera);
     if (!this.camera.free) Object.assign(this.camera, this.cameraForFocus());
     this.render();
+    this.emitCamera(previous, 'resize');
   }
 
   on(type, listener) {
@@ -356,11 +382,12 @@ export class Gridmap {
     if (typeof callback === 'function') callback(payload, this);
   }
 
-  addLayer(layer) {
-    this.layers.add(layer);
+  addLayer(layer, { above = false } = {}) {
+    const layers = above ? this.layersAbove : this.layers;
+    layers.add(layer);
     this.render();
     return () => {
-      this.layers.delete(layer);
+      layers.delete(layer);
       this.render();
     };
   }
@@ -549,7 +576,18 @@ export class Gridmap {
     return Math.min(Math.max(k, min), max);
   }
 
+  getCamera() {
+    return cameraOf(this.camera);
+  }
+
+  /** Moves the camera as the host; it stops a glide. Reported as a 'cameraChange' from 'api'. */
   setCamera(cx, cy, k) {
+    this.cancelGlide();
+    this.placeCamera(cx, cy, k, 'api');
+  }
+
+  placeCamera(cx, cy, k, source) {
+    const previous = cameraOf(this.camera);
     const world = this.model.world;
     this.camera.k = this.clampK(k);
     this.camera.cx = Math.min(Math.max(cx, world.x), world.x + world.width);
@@ -557,11 +595,19 @@ export class Gridmap {
     this.camera.free = true;
     // drags and pinches call this for every pointer event, often faster than the screen refreshes: draw once a frame
     this.requestRender();
+    this.emitCamera(previous, source);
   }
 
-  zoomAround(sx, sy, wx, wy, k) {
+  /** 'cameraChange' says where the camera went, from where, and why: 'user', 'focus', 'glide', 'resize' or 'api'. */
+  emitCamera(previous, source) {
+    const { cx, cy, k } = this.camera;
+    if (cx === previous.cx && cy === previous.cy && k === previous.k) return;
+    this.emit('cameraChange', { cx, cy, k, previous, source });
+  }
+
+  zoomAround(sx, sy, wx, wy, k, source = 'user') {
     k = this.clampK(k);
-    this.setCamera(wx - (sx - this.viewport().w / 2) / k, wy - (sy - this.viewport().h / 2) / k, k);
+    this.placeCamera(wx - (sx - this.viewport().w / 2) / k, wy - (sy - this.viewport().h / 2) / k, k, source);
   }
 
   focusRegion() {
@@ -584,18 +630,82 @@ export class Gridmap {
     return this.frame(this.model.world, this.options.layout === 'fit' ? 1 : 0.92);
   }
 
-  setFocus(level, value = null) {
-    const focus = resolveFocus(this.model, level, value);
-    if (!focus) return false;
+  enterFocus(focus) {
     this.state.focus = focus;
     this.state.hover = null;
     this.pressedCell = null;
     this.showTooltip(null);
     this.root.style.cursor = '';
+  }
+
+  setFocus(level, value = null) {
+    const focus = resolveFocus(this.model, level, value);
+    if (!focus) return false;
+    this.cancelGlide();
+    this.enterFocus(focus);
+    const previous = cameraOf(this.camera);
     Object.assign(this.camera, this.cameraForFocus(), { free: false });
     this.emit('focusChange', focus);
     this.render();
+    this.emitCamera(previous, 'focus');
     return true;
+  }
+
+  /**
+   * Focuses as setFocus does, but moves the camera there smoothly rather than jumping. The focus changes at once; the
+   * camera eases from `from` (default: where it is) and settles where setFocus would leave it. A tap, drag, pinch or
+   * scroll, another focus or setCamera stops it. Under reduced motion, or with no duration, it jumps.
+   */
+  glideTo(level, value = null, { duration = 1000, from = null } = {}) {
+    const focus = resolveFocus(this.model, level, value);
+    if (!focus) return false;
+    this.cancelGlide();
+    const start = from ? cameraOf(from) : cameraOf(this.camera);
+    this.enterFocus(focus);
+    const end = this.cameraForFocus();
+    this.emit('focusChange', focus);
+    const still = !(duration > 0) || globalThis.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+    const place = (camera, free, source) => {
+      const previous = cameraOf(this.camera);
+      Object.assign(this.camera, camera, { free });
+      this.render();
+      this.emitCamera(previous, source);
+    };
+    if (still) {
+      place(end, false, 'focus');
+      return true;
+    }
+    const glide = { frame: 0, began: null };
+    const step = (now) => {
+      if (this.glide !== glide || this.destroyed) return;
+      glide.began ??= now;
+      const t = Math.min(1, (now - glide.began) / duration);
+      if (t < 1) {
+        const e = easeInOut(t);
+        glide.frame = requestAnimationFrame(step);
+        place({ cx: start.cx + (end.cx - start.cx) * e, cy: start.cy + (end.cy - start.cy) * e, k: start.k * (end.k / start.k) ** e }, true, 'glide');
+      } else {
+        this.glide = null;
+        // where setFocus would leave it now, in case the map was resized on the way
+        place(this.cameraForFocus(), false, 'glide');
+      }
+    };
+    this.glide = glide;
+    place(start, true, 'glide');
+    glide.frame = requestAnimationFrame(step);
+    return true;
+  }
+
+  /** Stops a glide where it is; true if one was moving. */
+  cancelGlide() {
+    if (!this.glide) return false;
+    cancelAnimationFrame(this.glide.frame);
+    this.glide = null;
+    return true;
+  }
+
+  isGliding() {
+    return this.glide !== null;
   }
 
   getFocus() { return this.state.focus; }
@@ -681,6 +791,7 @@ export class Gridmap {
 
   onPointerDown(event) {
     if (event.pointerType === 'mouse' && event.button !== 0) return;
+    this.cancelGlide();
     const point = this.pointerPoint(event);
     this.pointers.set(event.pointerId, point);
     clearTimeout(this.tooltipTimer);
@@ -730,7 +841,7 @@ export class Gridmap {
         this.clearPressedCell();
         this.clearHover();
         const cam = this.drag.cam;
-        this.setCamera(cam.cx - dx / cam.k, cam.cy - dy / cam.k, cam.k);
+        this.placeCamera(cam.cx - dx / cam.k, cam.cy - dy / cam.k, cam.k, 'user');
       }
       return;
     }
@@ -826,6 +937,7 @@ export class Gridmap {
 
   onWheel(event) {
     event.preventDefault();
+    this.cancelGlide();
     const rect = this.root.getBoundingClientRect();
     const x = event.clientX - rect.left;
     const y = event.clientY - rect.top;
@@ -1012,21 +1124,25 @@ export class Gridmap {
     if (this.options.showMarks) this.renderMarks(ctx, X, Y, onScreen, attention);
     this.renderDisabled(ctx, rect, onScreen);
 
-    for (const layer of this.layers) {
-      layer({
-        ctx,
-        model: this.model,
-        state: this.state,
-        camera: this.camera,
-        rect,
-        toScreenX: X,
-        toScreenY: Y,
-        colourOf: (entity, fallback) => this.colourOf(entity, fallback),
-        theme,
-      });
-    }
+    const dot = this.dotSize();
+    const helpers = {
+      ctx,
+      map: this,
+      model: this.model,
+      state: this.state,
+      camera: this.camera,
+      rect,
+      toScreenX: X,
+      toScreenY: Y,
+      colourOf: (entity, fallback) => this.colourOf(entity, fallback),
+      markRadius: (cell) => dot * this.markScale(cell) / 2,
+      theme,
+    };
+    const paint = (layer) => { ctx.save(); layer(helpers); ctx.restore(); };
+    this.layers.forEach(paint);
 
     this.renderVeil(ctx, rect);
+    this.layersAbove.forEach(paint);
     this.renderLabels(X, Y, attention);
     if (this.labelBackground() === 'transparent') this.cutBehindLabels(ctx);
   }
@@ -1065,6 +1181,11 @@ export class Gridmap {
     );
   }
 
+  // A dot's diameter at this zoom, before its cell's share (markScale)
+  dotSize() {
+    return Math.min(7, 3 * (this.camera.k / this.frame(this.model.world).k) ** 0.28);
+  }
+
   useNumbers() {
     return this.options.markType === 'number' && this.medianNumberSize * this.camera.k >= this.options.numberMinPx;
   }
@@ -1072,8 +1193,7 @@ export class Gridmap {
   renderMarks(ctx, X, Y, onScreen, attention = this.attentionState()) {
     const theme = this.options.theme;
     const useNumbers = this.useNumbers();
-    const worldK = this.frame(this.model.world).k;
-    const dot = Math.min(7, 3 * (this.camera.k / worldK) ** 0.28);
+    const dot = this.dotSize();
     const damping = useNumbers
       ? Math.min(1, 24 / (this.medianNumberSize * this.camera.k))
       : 1;
@@ -1430,7 +1550,10 @@ export class Gridmap {
   }
 
   destroy() {
+    this.cancelGlide();
     this.destroyed = true;
+    if (mounted.get(this.container) === this) mounted.delete(this.container);
+    this.emit('destroy', this);
     clearTimeout(this.tooltipTimer);
     this.resizeObserver?.disconnect();
     window.removeEventListener('resize', this.bound?.resize);

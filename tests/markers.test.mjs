@@ -64,7 +64,7 @@ test('touch press emphasis clears for panning while taps still select', () => {
   const { map, cells } = fixture();
   Object.assign(map, {
     pointers: new Map(), root: { getBoundingClientRect: () => ({ left: 0, top: 0 }) },
-    hitTest: () => cells[0], toWorldX: (x) => x, toWorldY: (y) => y, requestRender() {}, showTooltip() {}, setCamera() {},
+    hitTest: () => cells[0], toWorldX: (x) => x, toWorldY: (y) => y, requestRender() {}, showTooltip() {}, setCamera() {}, placeCamera() {},
     selectCell(cell) { this.state.selected = cell; },
   });
   const event = (x) => ({ pointerType: 'touch', pointerId: 1, clientX: x, clientY: 6 });
